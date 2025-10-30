@@ -98,6 +98,8 @@ jobs:
         echo "Updated version to $version"
       
     - name: Publish extension
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
       run: |
         $version = if ("${{ env.NEW_VERSION }}") { "${{ env.NEW_VERSION }}" } else { "auto" }
         echo "Publishing version: $version"
@@ -105,12 +107,10 @@ jobs:
         echo "PR Merged: ${{ github.event.pull_request.merged }}"
         
         if ("${{ github.event_name }}" -eq "release" -and "${{ github.event.release.prerelease }}" -eq "true") {
-          vsce publish --pre-release --pat ${{ secrets.VSCE_PAT }}
+          vsce publish --pre-release --pat $env:VSCE_PAT
         } else {
-          vsce publish --pat ${{ secrets.VSCE_PAT }}
+          vsce publish
         }
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
         
     - name: Create tag for auto-publish
       if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
@@ -147,8 +147,8 @@ jobs:
       run: |
         git push origin "v${{ env.NEW_VERSION }}" --follow-tags
         
-    - name: Create Release for auto-publish
-      if: (github.event_name == 'push' || github.event_name == 'pull_request') && github.event.pull_request.merged != true
+    - name: Create Release for auto-publish (push)
+      if: github.event_name == 'push'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ env.NEW_VERSION }}"
@@ -160,6 +160,7 @@ jobs:
           *.vsix
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
         
     - name: Create Release for PR merge
       if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
