@@ -1,0 +1,131 @@
+{
+  "name": "rusty-refactor",
+  "displayName": "Rusty Refactor",
+  "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
+  "version": "0.2.2",
+  "publisher": "rusty-refactor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rusty-refactor/rusty-refactor"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Other"
+  ],
+  "keywords": [
+    "rust",
+    "rustyroad",
+    "refactoring",
+    "module",
+    "extract",
+    "rust-analyzer",
+    "rails"
+  ],
+  "activationEvents": [
+    "onLanguage:rust",
+    "workspaceContains:**/Cargo.toml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rustyRefactor.extractToModule",
+        "title": "Rusty Refactor: Extract to Module"
+      },
+      {
+        "command": "rustyRefactor.extractToModuleWithSearch",
+        "title": "Rusty Refactor: Extract to Module (Browse Files)"
+      },
+      {
+        "command": "rustyRefactor.extractToModuleCustomPath",
+        "title": "Rusty Refactor: Extract to Module (Custom Path)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorHasSelection && editorLangId == rust",
+          "command": "rustyRefactor.extractToModuleWithSearch",
+          "group": "1_modification@1"
+        },
+        {
+          "when": "editorHasSelection && editorLangId == rust",
+          "command": "rustyRefactor.extractToModule",
+          "group": "1_modification@2"
+        },
+        {
+          "when": "editorHasSelection && editorLangId == rust",
+          "command": "rustyRefactor.extractToModuleCustomPath",
+          "group": "1_modification@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Rusty Refactor",
+      "properties": {
+        "rustyRefactor.rustyRoadMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable RustyRoad-specific conventions (suggests controllers, models, services, etc.)"
+        },
+        "rustyRefactor.defaultModulePath": {
+          "type": "string",
+          "default": "src",
+          "description": "Default path for new modules"
+        },
+        "rustyRefactor.autoFormatAfterRefactor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically format files after refactoring"
+        },
+        "rustyRefactor.addModuleDocComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "Add documentation comments to extracted modules"
+        },
+        "rustyRefactor.integrationWithRustAnalyzer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Integrate with rust-analyzer for better type detection and unused import cleanup"
+        },
+        "rustyRefactor.aiAutoDocumentation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically generate AI-powered documentation for extracted modules using GitHub Copilot"
+        },
+        "rustyRefactor.aiAskEachTime": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before generating AI documentation each time (if aiAutoDocumentation is false)"
+        },
+        "rustyRefactor.searchDepth": {
+          "type": "number",
+          "default": 5,
+          "description": "Maximum directory depth for file search"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build:rust && npm run compile",
+    "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "eslint": "^8.x",
+    "typescript": "^5.x"
+  },
+  "dependencies": {}
+}

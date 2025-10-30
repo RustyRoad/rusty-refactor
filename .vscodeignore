@@ -1,0 +1,46 @@
+# Ignore common files/folders that should not be published in the VSIX
+node_modules/
+**/target/
+target/
+rust-backend/target/
+rust-backend/.cargo/
+**/*.pdb
+**/*.rlib
+**/*.rlib.meta
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.private
+**/*.env
+.git/
+.gitignore
+.vscode/
+*.vsix
+*.log
+out/test/
+
+# Keep package files and built extension output
+!out/**
+!package.json
+!README.mdnode_modules/
+*.vsix
+src/
+.vscode/
+*.ts
+!*.d.ts
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/.eslintrc.json
+**/*.map
+**/*.ts
+
+# Rust backend - exclude source but INCLUDE the compiled binary
+rust-backend/src/
+rust-backend/Cargo.toml
+rust-backend/Cargo.lock
+rust-backend/target/debug/
+!rust-backend/target/release/rusty_refactor_worker
+!rust-backend/target/release/rusty_refactor_worker.exe
