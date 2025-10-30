@@ -4,11 +4,38 @@ This document explains how to publish the Rusty Refactor extension to the VS Cod
 
 ## Automated Publishing
 
-The extension uses GitHub Actions for automated publishing. There are two ways to trigger a publish:
+The extension uses GitHub Actions for automated publishing. There are multiple ways to trigger a publish:
 
-### Option 1: Automatic on Release Creation
+### Option 1: Automatic on Push to Main
 
-When you create a GitHub Release, the extension will be automatically published:
+The extension will automatically publish whenever you push to the main branch:
+
+1. Make your changes
+2. Commit and push to main:
+   ```bash
+   git add .
+   git commit -m "Implement new feature"
+   git push origin main
+   ```
+
+The GitHub Action will:
+- Auto-increment the version (e.g., 0.2.3 → 0.2.4)
+- Build the extension
+- Publish to the VS Code Marketplace
+- Create a GitHub release with the new version
+
+### Option 2: Automatic on PR Merge
+
+When you merge a pull request into main, the extension will automatically publish:
+
+1. Create a pull request with your changes
+2. Merge the pull request into main
+
+The GitHub Action will handle the publishing process automatically.
+
+### Option 3: Manual with Release Creation
+
+For manual control, you can still use the traditional release-based publishing:
 
 1. Update the version in `package.json` (e.g., from "0.2.3" to "0.2.4")
 2. Commit and push the changes:
@@ -24,8 +51,6 @@ When you create a GitHub Release, the extension will be automatically published:
    - Set the title (e.g., "Release v0.2.4")
    - Mark as a prerelease if this is not a stable release
    - Click "Publish release"
-
-The GitHub Action will automatically build and publish the extension.
 
 ### Option 2: Manual Workflow Trigger
 
