@@ -52,6 +52,9 @@
     function updateDirectory(message) {
         currentPath = message.currentPath;
         
+        // Clear selection when navigating to a new directory
+        selectedPath = '';
+        
         // Update breadcrumb
         updateBreadcrumb(message.breadcrumb);
         
@@ -60,6 +63,9 @@
         
         // Update current path display
         updateCurrentPathDisplay(currentPath);
+        
+        // Update button state
+        updateButtonState();
     }
     
     function updateBreadcrumb(breadcrumb) {
@@ -216,7 +222,6 @@
             // Handle different types
             if (item.type === 'parent' || item.type === 'directory' || item.type === 'suggestion') {
                 // Navigate to directory
-                selectedPath = item.path;
                 vscode.postMessage({
                     command: 'selectDirectory',
                     path: item.path
@@ -231,7 +236,7 @@
                 });
                 itemEl.classList.add('selected');
                 
-                // Update button state
+                // Update button state - enable the button
                 updateButtonState();
                 
                 // Show/hide conversion info
@@ -259,6 +264,7 @@
     
     function updateButtonState() {
         const btn = document.getElementById('create-btn');
+        if (selectedPath && selectedPath.length > 0) {
         if (selectedPath) {
             btn.disabled = false;
             btn.classList.remove('disabled');
@@ -266,7 +272,6 @@
             btn.disabled = true;
             btn.classList.add('disabled');
         }
-    }
     
     function updateCurrentPathDisplay(path) {
         document.querySelector('.current-path').textContent = `Current: ${path}`;

@@ -2,11 +2,11 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rusty-refactor/rusty-refactor"
+    "url": "https://github.com/rileyseaburg/rusty-refactor"
   },
   "engines": {
     "vscode": "^1.80.0"
@@ -117,7 +117,11 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "build": "npm run build:rust && npm run compile",
+    "package-publish": "npm run build && npm run package"
   },
   "devDependencies": {
     "@types/node": "^20.x",

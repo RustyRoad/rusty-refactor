@@ -1,0 +1,113 @@
+name: Publish Extension
+
+on:
+  # Trigger when a release is created
+  release:
+    types: [published]
+  
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.2.4)'
+        required: true
+        default: '0.2.4'
+      prerelease:
+        description: 'Is this a prerelease?'
+        required: true
+        default: 'false'
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm install
+      
+    - name: Install Visual Studio Code Extension CLI
+      run: npm install -g @vscode/vsce
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Install cargo-make
+      run: cargo install cargo-make
+      
+    - name: Build Rust backend
+      run: cargo build --release --manifest-path rust-backend/Cargo.toml
+      
+    - name: Compile TypeScript
+      run: npm run compile
+      
+    - name: Update version for manual publish
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        $version = "${{ github.event.inputs.version }}"
+        npm version $version --no-git-tag-version
+        echo "Updated version to $version"
+      
+    - name: Publish extension
+      run: |
+        if ("${{ github.event_name }}" -eq "release" -and "${{ github.event.release.prerelease }}" -eq "true") {
+          vsce publish --pre-release --pat ${{ secrets.VSCE_PAT }}
+        } else {
+          vsce publish --pat ${{ secrets.VSCE_PAT }}
+        }
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        
+    - name: Create tag for manual publish
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        $version = "${{ github.event.inputs.version }}"
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add package.json
+        git commit -m "Bump version to $version"
+        git tag "v$version"
+        
+    - name: Push tag for manual publish
+      if: github.event_name == 'workflow_dispatch'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git push origin "v${{ github.event.inputs.version }}" --follow-tags
+        
+    - name: Create Release for manual publish
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'false'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "v${{ github.event.inputs.version }}"
+        name: "Release v${{ github.event.inputs.version }}"
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        files: |
+          *.vsix
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Create Pre-release for manual publish
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "v${{ github.event.inputs.version }}"
+        name: "Pre-release v${{ github.event.inputs.version }}"
+        draft: false
+        prerelease: true
+        generate_release_notes: true
+        files: |
+          *.vsix
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,6 +2,14 @@
 
 All notable changes to the "Rusty Refactor" extension will be documented in this file.
 
+## [0.2.3] - 2025-10-30
+
+### Fixed
+- **Path Selection**: Fixed issue where the module extractor UI wouldn't allow path selection after entering a module name
+  - Users can now successfully click "Create module here" to select a location
+  - Button state properly enables when a valid path is selected
+  - Improved UI feedback for selected paths
+
 ## [0.2.0] - 2025-10-21
 
 ### Major: Rust Compiler Bridge Integration 🚀
