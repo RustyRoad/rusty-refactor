@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.2.34",
+  "version": "0.2.35",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
