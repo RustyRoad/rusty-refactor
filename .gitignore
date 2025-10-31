@@ -6,3 +6,5 @@ node_modules
 
 # Rust build artifacts (binaries will be built during package time)
 rust-backend/target/
+
+target/
