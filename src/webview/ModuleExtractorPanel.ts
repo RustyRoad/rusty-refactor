@@ -30,6 +30,7 @@ export class ModuleExtractorPanel {
     private _moduleName: string = '';
     private _selectedCode: string = '';
     private _analysisResult: any;
+    private _disposed = false; // Prevent re-entrant dispose loops
     
     // Store the promise and resolve function for when user makes a selection
     private _selectionPromise?: Promise<string | undefined>;
@@ -455,17 +456,23 @@ export class ModuleExtractorPanel {
     }
 
     public dispose() {
+        if (this._disposed) {
+            return;
+        }
+        this._disposed = true;
         ModuleExtractorPanel.instance = undefined;
         if (this._resolveSelection) {
             this._resolveSelection(undefined);
+            this._resolveSelection = undefined;
         }
-        
-        this._panel?.dispose();
+        const panel = this._panel;
+        this._panel = undefined;
         while (this._disposables.length) {
             const x = this._disposables.pop();
             if (x) {
                 x.dispose();
             }
         }
+        panel?.dispose();
     }
 }

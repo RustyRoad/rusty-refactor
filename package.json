@@ -6,7 +6,7 @@
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rileyseaburg/rusty-refactor"
+    "url": "https://github.com/RustyRoad/rusty-refactor"
   },
   "engines": {
     "vscode": "^1.80.0"
@@ -123,13 +123,13 @@
     "build": "npm run build:rust && npm run compile",
     "package-publish": "npm run build && npm run package"
   },
-  "devDependencies": {
-    "@types/node": "^20.x",
-    "@types/vscode": "^1.80.0",
-    "@typescript-eslint/eslint-plugin": "^6.x",
-    "@typescript-eslint/parser": "^6.x",
-    "eslint": "^8.x",
-    "typescript": "^5.x"
+  "devDependencies": {  
+    "@types/node": "24.9.2",
+    "@types/vscode": "1.105.0",
+    "@typescript-eslint/eslint-plugin": "8.46.2",
+    "@typescript-eslint/parser": "8.46.2",
+    "eslint": "9.38.0",
+    "typescript": "5.0.0"
   },
   "dependencies": {}
 }
