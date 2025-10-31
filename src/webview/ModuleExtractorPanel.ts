@@ -85,9 +85,6 @@ export class ModuleExtractorPanel {
         this._panel = panel;
         this._fileSearchProvider = new FileSearchProvider(workspaceFolder);
         
-        // Set the webview's initial html content
-        this._update();
-        
         // Listen for when the panel is disposed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         
@@ -112,6 +109,9 @@ export class ModuleExtractorPanel {
             undefined,
             this._disposables
         );
+        
+        // Update HTML after setting up message handlers
+        this._update();
     }
     
     public updateData(moduleName: string, selectedCode: string, analysisResult: any) {
@@ -163,7 +163,10 @@ export class ModuleExtractorPanel {
         const rustyRoadMode = config.get<boolean>('rustyRoadMode', true);
         
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) return;
+        if (!workspaceFolder) {
+            console.error('No workspace folder found');
+            return;
+        }
         
         try {
             // Get file system entries
@@ -171,6 +174,8 @@ export class ModuleExtractorPanel {
             let directories: any[] = [];
             let moduleFiles: any[] = [];
             let suggestions: any[] = [];
+            
+            console.log(`Loading directory items for path: ${fullPath}`);
             
             // Get items using FileSearchProvider logic
             if (!fs.existsSync(fullPath)) {
@@ -250,7 +255,7 @@ export class ModuleExtractorPanel {
             directories.sort((a, b) => a.name.localeCompare(b.name));
             
             // Send data to webview
-            this._panel?.webview.postMessage({
+            const updateMessage = {
                 command: 'updateDirectory',
                 currentPath,
                 parentPath: path.dirname(currentPath),
@@ -258,7 +263,10 @@ export class ModuleExtractorPanel {
                 moduleFiles,
                 suggestions,
                 breadcrumb: this._generateBreadcrumb(currentPath)
-            });
+            };
+            
+            console.log('Sending updateDirectory message:', updateMessage);
+            this._panel?.webview.postMessage(updateMessage);
             
         } catch (error) {
             console.error('Error loading directory items:', error);

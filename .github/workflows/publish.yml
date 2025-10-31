@@ -56,18 +56,6 @@ jobs:
     - name: Install Visual Studio Code Extension CLI
       run: npm install -g @vscode/vsce
       
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Install cargo-make
-      run: cargo install cargo-make
-      
-    - name: Build Rust backend
-      run: cargo build --release --manifest-path rust-backend/Cargo.toml
-      
-    - name: Compile TypeScript
-      run: npm run compile
-      
     - name: Auto-increment version on push
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
@@ -99,6 +87,32 @@ jobs:
         npm version $version --no-git-tag-version
         echo "NEW_VERSION=$version" >> $env:GITHUB_ENV
         echo "Updated version to $version"
+        
+    - name: Use release version
+      if: github.event_name == 'release'
+      run: |
+        $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+        npm version $version --no-git-tag-version --allow-same-version
+        echo "NEW_VERSION=$version" >> $env:GITHUB_ENV
+        echo "Using release version $version"
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Install cargo-make
+      run: cargo install cargo-make
+      
+    - name: Build Rust backend
+      run: cargo build --release --manifest-path rust-backend/Cargo.toml
+      
+    - name: Compile TypeScript
+      run: npm run compile
+      
+    - name: Package extension
+      run: |
+        $version = "${{ env.NEW_VERSION }}"
+        echo "Packaging version $version"
+        vsce package
       
     - name: Publish extension
       run: |
@@ -116,40 +130,43 @@ jobs:
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
         
-    - name: Create tag for auto-publish
-      if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    - name: Commit version bump and create tag
+      if: github.event_name != 'release'
       run: |
         $version = "${{ env.NEW_VERSION }}"
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add package.json
-        git commit -m "Auto-bump version to $version [skip ci]"
-        git tag "v$version"
         
-    - name: Create tag for manual publish
-      if: github.event_name == 'workflow_dispatch'
+        # Check if there are changes to commit
+        $hasChanges = git diff --staged --quiet; $LASTEXITCODE -ne 0
+        if ($hasChanges) {
+          git commit -m "Bump version to $version [skip ci]"
+          echo "Version bumped to $version"
+        } else {
+          echo "No version changes to commit"
+        }
+        
+        git tag "v$version"
+        echo "Created tag v$version"
+        
+    - name: Push changes and tags
+      if: github.event_name != 'release'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         $version = "${{ env.NEW_VERSION }}"
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add package.json
-        git commit -m "Bump version to $version [skip ci]"
-        git tag "v$version"
         
-    - name: Push changes and tags for auto-publish
-      if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git push origin main
-        git push origin "v${{ env.NEW_VERSION }}" --follow-tags
+        # Push commits if they exist
+        $hasCommits = git log origin/main..HEAD --oneline
+        if ($hasCommits) {
+          git push origin main
+          echo "Pushed version bump commit to main"
+        }
         
-    - name: Push tag for manual publish
-      if: github.event_name == 'workflow_dispatch'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git push origin "v${{ env.NEW_VERSION }}" --follow-tags
+        # Always push the tag
+        git push origin "v$version"
+        echo "Pushed tag v$version"
         
     - name: Create Release for auto-publish (push)
       if: github.event_name == 'push'

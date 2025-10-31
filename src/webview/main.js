@@ -13,8 +13,12 @@
         document.getElementById('create-btn').addEventListener('click', handleConfirm);
         document.getElementById('cancel-btn').addEventListener('click', handleCancel);
         
-        // Notify extension that webview is ready
-        vscode.postMessage({ command: 'ready' });
+        // Add a small delay before notifying extension that webview is ready
+        // This ensures all DOM elements are properly loaded
+        setTimeout(() => {
+            console.log('Webview fully loaded, sending ready command');
+            vscode.postMessage({ command: 'ready' });
+        }, 100);
     });
     
     // Handle messages from extension
@@ -50,6 +54,7 @@
     }
     
     function updateDirectory(message) {
+        console.log('updateDirectory called with:', message);
         currentPath = message.currentPath;
         
         // Clear selection when navigating to a new directory
@@ -102,6 +107,12 @@
     
     function updateFileTree(data) {
         const treeContent = document.getElementById('file-tree-content');
+        if (!treeContent) {
+            console.error('file-tree-content element not found');
+            return;
+        }
+        
+        console.log('Updating file tree with data:', data);
         treeContent.innerHTML = '';
         
         // Add parent directory option if not at root
@@ -265,13 +276,13 @@
     function updateButtonState() {
         const btn = document.getElementById('create-btn');
         if (selectedPath && selectedPath.length > 0) {
-        if (selectedPath) {
             btn.disabled = false;
             btn.classList.remove('disabled');
         } else {
             btn.disabled = true;
             btn.classList.add('disabled');
         }
+    }
     
     function updateCurrentPathDisplay(path) {
         document.querySelector('.current-path').textContent = `Current: ${path}`;
