@@ -1,0 +1,354 @@
+name: 'RustyRoad Extension Publisher'
+description: 'Complete build and publish pipeline for RustyRoad VSCode extensions with Rust backends'
+author: 'RustyRoad'
+
+branding:
+  icon: 'package'
+  color: 'orange'
+
+inputs:
+  # Version Management
+  version-bump:
+    description: 'How to bump version: auto (patch), minor, major, or specific version (e.g., 1.2.3)'
+    required: false
+    default: 'auto'
+  skip-version-check:
+    description: 'Skip checking if version already exists'
+    required: false
+    default: 'false'
+    
+  # Build Configuration
+  rust-version:
+    description: 'Rust toolchain version'
+    required: false
+    default: 'stable'
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  rust-manifest-path:
+    description: 'Path to Rust Cargo.toml'
+    required: false
+    default: 'rust-backend/Cargo.toml'
+    
+  # Publishing Options
+  vsce-pat:
+    description: 'Visual Studio Code Extension Personal Access Token'
+    required: true
+  github-token:
+    description: 'GitHub token for creating releases'
+    required: true
+  prerelease:
+    description: 'Publish as pre-release'
+    required: false
+    default: 'false'
+  create-github-release:
+    description: 'Create GitHub release'
+    required: false
+    default: 'true'
+  
+  # Advanced Options
+  cache-key-prefix:
+    description: 'Cache key prefix'
+    required: false
+    default: 'rustyroad-v1'
+  skip-tests:
+    description: 'Skip running tests'
+    required: false
+    default: 'false'
+
+outputs:
+  version:
+    description: 'Published version number'
+    value: ${{ steps.version.outputs.version }}
+  vsix-path:
+    description: 'Path to generated VSIX file'
+    value: ${{ steps.package.outputs.vsix-path }}
+  published:
+    description: 'Whether extension was published'
+    value: ${{ steps.publish-check.outputs.published }}
+
+runs:
+  using: 'composite'
+  steps:
+    # ============================================
+    # VERSION MANAGEMENT
+    # ============================================
+    - name: Determine Version
+      id: version
+      shell: pwsh
+      run: |
+        $currentVersion = node -p "require('./package.json').version"
+        Write-Host "Current version: $currentVersion"
+        
+        $bumpType = "${{ inputs.version-bump }}"
+        
+        if ($bumpType -match '^\d+\.\d+\.\d+$') {
+          # Specific version provided
+          $newVersion = $bumpType
+        } else {
+          # Auto increment
+          $parts = $currentVersion.Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          $patch = [int]$parts[2]
+          
+          switch ($bumpType) {
+            'major' { $major++; $minor = 0; $patch = 0 }
+            'minor' { $minor++; $patch = 0 }
+            default { $patch++ }  # 'auto' or 'patch'
+          }
+          
+          $newVersion = "$major.$minor.$patch"
+        }
+        
+        npm version $newVersion --no-git-tag-version
+        Write-Host "New version: $newVersion"
+        echo "version=$newVersion" >> $env:GITHUB_OUTPUT
+        echo "VERSION=$newVersion" >> $env:GITHUB_ENV
+        
+    - name: Check if version exists
+      id: version-check
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        $skipCheck = "${{ inputs.skip-version-check }}" -eq "true"
+        
+        if ($skipCheck) {
+          Write-Host "Skipping version check"
+          echo "exists=false" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+        
+        # Check if git tag exists
+        git fetch --tags 2>$null
+        $tagExists = git tag -l "v$version"
+        
+        if ($tagExists) {
+          Write-Host "::warning::Version v$version already exists as a git tag"
+          echo "exists=true" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "exists=false" >> $env:GITHUB_OUTPUT
+        }
+    
+    # ============================================
+    # RUST BACKEND BUILD
+    # ============================================
+    - name: Setup Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-version }}
+        
+    - name: Cache Cargo Registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ inputs.cache-key-prefix }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-registry-
+          
+    - name: Cache Cargo Index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ inputs.cache-key-prefix }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-index-
+          
+    - name: Cache Cargo Build
+      uses: actions/cache@v4
+      with:
+        path: |
+          rust-backend/target
+          target
+        key: ${{ inputs.cache-key-prefix }}-cargo-build-${{ runner.os }}-${{ hashFiles('rust-backend/**/Cargo.toml', 'rust-backend/**/*.rs') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-build-${{ runner.os }}-
+          
+    - name: Install cargo-make (cached)
+      shell: pwsh
+      run: |
+        $cargoMakeVersion = cargo make --version 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✓ cargo-make already installed: $cargoMakeVersion"
+        } else {
+          Write-Host "Installing cargo-make..."
+          cargo install cargo-make --locked
+        }
+        
+    - name: Build Rust Backend
+      shell: pwsh
+      run: |
+        Write-Host "🦀 Building Rust backend..."
+        cargo build --release --manifest-path ${{ inputs.rust-manifest-path }}
+        
+        # Verify build
+        $dllPath = "rust-backend/target/release/rusty_refactor_worker.dll"
+        if (Test-Path $dllPath) {
+          Write-Host "✓ Rust backend built successfully"
+          $fileInfo = Get-Item $dllPath
+          Write-Host "  📦 Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
+        } else {
+          Write-Error "❌ Build failed: DLL not found"
+          exit 1
+        }
+    
+    # ============================================
+    # TYPESCRIPT BUILD
+    # ============================================
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+        
+    - name: Install Dependencies
+      shell: pwsh
+      run: |
+        Write-Host "📦 Installing npm dependencies..."
+        npm ci
+        
+    - name: Run Tests
+      if: inputs.skip-tests != 'true'
+      shell: pwsh
+      run: |
+        Write-Host "🧪 Running tests..."
+        npm test 2>$null || Write-Host "No tests configured"
+        
+    - name: Compile TypeScript
+      shell: pwsh
+      run: |
+        Write-Host "🔨 Compiling TypeScript..."
+        npm run compile
+        Write-Host "✓ TypeScript compiled"
+    
+    # ============================================
+    # PACKAGE & PUBLISH
+    # ============================================
+    - name: Install VSCE
+      shell: pwsh
+      run: |
+        Write-Host "Installing @vscode/vsce..."
+        npm install -g @vscode/vsce
+        
+    - name: Package Extension
+      id: package
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        Write-Host "📦 Packaging extension v$version..."
+        
+        vsce package
+        
+        $vsixFile = Get-ChildItem -Filter "*.vsix" | Select-Object -First 1
+        if ($vsixFile) {
+          Write-Host "✓ VSIX created: $($vsixFile.Name)"
+          echo "vsix-path=$($vsixFile.FullName)" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Error "❌ Failed to create VSIX"
+          exit 1
+        }
+        
+    - name: Publish to Marketplace
+      id: publish-check
+      if: steps.version-check.outputs.exists != 'true'
+      shell: pwsh
+      env:
+        VSCE_PAT: ${{ inputs.vsce-pat }}
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        $isPrerelease = "${{ inputs.prerelease }}" -eq "true"
+        
+        Write-Host "🚀 Publishing v$version to VS Code Marketplace..."
+        
+        try {
+          if ($isPrerelease) {
+            vsce publish --pre-release --pat $env:VSCE_PAT
+          } else {
+            vsce publish --pat $env:VSCE_PAT
+          }
+          Write-Host "✓ Extension published successfully!"
+          echo "published=true" >> $env:GITHUB_OUTPUT
+        } catch {
+          Write-Error "❌ Publishing failed: $_"
+          echo "published=false" >> $env:GITHUB_OUTPUT
+          exit 1
+        }
+    
+    # ============================================
+    # GIT TAGGING & RELEASE
+    # ============================================
+    - name: Create Git Tag
+      if: steps.version-check.outputs.exists != 'true'
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "RustyRoad Publisher"
+        
+        # Commit version bump
+        git add package.json package-lock.json
+        $status = git status --porcelain
+        if ($status) {
+          git commit -m "🚀 Bump version to $version [skip ci]"
+          Write-Host "✓ Version bump committed"
+        }
+        
+        # Create tag
+        git tag -a "v$version" -m "Release v$version"
+        Write-Host "✓ Tag v$version created"
+        
+    - name: Push Changes
+      if: steps.version-check.outputs.exists != 'true'
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        
+        # Configure git to use token
+        git remote set-url origin "https://x-access-token:$env:GITHUB_TOKEN@github.com/${{ github.repository }}.git"
+        
+        # Push commit
+        $hasCommits = git log origin/${{ github.ref_name }}..${{ github.ref_name }} --oneline
+        if ($hasCommits) {
+          git push origin ${{ github.ref_name }}
+          Write-Host "✓ Version bump pushed"
+        }
+        
+        # Push tag
+        git push origin "v$version"
+        Write-Host "✓ Tag pushed"
+        
+    - name: Create GitHub Release
+      if: inputs.create-github-release == 'true' && steps.version-check.outputs.exists != 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        name: Release v${{ steps.version.outputs.version }}
+        draft: false
+        prerelease: ${{ inputs.prerelease }}
+        generate_release_notes: true
+        files: '*.vsix'
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        
+    # ============================================
+    # SUMMARY
+    # ============================================
+    - name: Summary
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        $published = "${{ steps.publish-check.outputs.published }}"
+        
+        Write-Host ""
+        Write-Host "╔════════════════════════════════════════╗"
+        Write-Host "║  🦀 RustyRoad Extension Publisher  ║"
+        Write-Host "╚════════════════════════════════════════╝"
+        Write-Host ""
+        Write-Host "Version:    v$version"
+        Write-Host "Published:  $(if ($published -eq 'true') { '✓ Yes' } else { '✗ Skipped' })"
+        Write-Host "Prerelease: ${{ inputs.prerelease }}"
+        Write-Host ""

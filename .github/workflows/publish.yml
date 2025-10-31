@@ -1,256 +1,49 @@
-name: Publish Extension
+name: Publish Extension (RustyRoad)
 
 on:
-  # Trigger on push to main branch (auto-publish)
   push:
     branches: [ main ]
-  
-  # Trigger when a pull request is merged to main
   pull_request:
     types: [closed]
     branches: [ main ]
-    if: github.event.pull_request.merged == true
-  
-  # Trigger when a release is created (still supported)
   release:
     types: [published]
-  
-  # Allow manual triggering for testing
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.2.5)'
-        required: true
-        default: '0.2.5'
+        description: 'Version (e.g., 0.2.6, auto, patch, minor, major)'
+        required: false
+        default: 'auto'
       prerelease:
-        description: 'Is this a prerelease?'
-        required: true
-        default: 'false'
-        type: boolean
-      auto_increment:
-        description: 'Auto-increment version?'
-        required: true
-        default: 'true'
+        description: 'Publish as prerelease'
+        required: false
+        default: false
         type: boolean
 
 jobs:
   publish:
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     runs-on: windows-latest
     permissions:
       contents: write
       pull-requests: write
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         token: ${{ secrets.GH_TOKEN }}
       
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - name: 🦀 Publish with RustyRoad
+      uses: ./.github/actions/rustyroad-publish
       with:
+        version-bump: ${{ github.event.inputs.version || 'auto' }}
+        prerelease: ${{ github.event.inputs.prerelease || 'false' }}
+        vsce-pat: ${{ secrets.VSCE_PAT }}
+        github-token: ${{ secrets.GH_TOKEN }}
+        rust-version: 'stable'
         node-version: '20'
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: npm install
-      
-    - name: Install Visual Studio Code Extension CLI
-      run: npm install -g @vscode/vsce
-      
-    - name: Auto-increment version on push
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        $currentVersion = node -p "require('./package.json').version"
-        $parts = $currentVersion.Split('.')
-        $patch = [int]$parts[2]
-        $parts[2] = ($patch + 1).ToString()
-        $newVersion = $parts -join '.'
-        npm version $newVersion --no-git-tag-version
-        echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
-        echo "Auto-incremented version from $currentVersion to $newVersion"
-        
-    - name: Update version for manual publish
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.auto_increment == 'true'
-      run: |
-        $currentVersion = node -p "require('./package.json').version"
-        $parts = $currentVersion.Split('.')
-        $patch = [int]$parts[2]
-        $parts[2] = ($patch + 1).ToString()
-        $newVersion = $parts -join '.'
-        npm version $newVersion --no-git-tag-version
-        echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
-        echo "Auto-incremented version from $currentVersion to $newVersion"
-        
-    - name: Use specified version
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.auto_increment == 'false'
-      run: |
-        $version = "${{ github.event.inputs.version }}"
-        npm version $version --no-git-tag-version
-        echo "NEW_VERSION=$version" >> $env:GITHUB_ENV
-        echo "Updated version to $version"
-        
-    - name: Auto-increment version on PR merge
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
-      run: |
-        $currentVersion = node -p "require('./package.json').version"
-        $parts = $currentVersion.Split('.')
-        $patch = [int]$parts[2]
-        $parts[2] = ($patch + 1).ToString()
-        $newVersion = $parts -join '.'
-        npm version $newVersion --no-git-tag-version
-        echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
-        echo "Auto-incremented version from $currentVersion to $newVersion (PR merge)"
-        
-    - name: Use release version
-      if: github.event_name == 'release'
-      run: |
-        $version = "${{ github.event.release.tag_name }}".TrimStart('v')
-        npm version $version --no-git-tag-version --allow-same-version
-        echo "NEW_VERSION=$version" >> $env:GITHUB_ENV
-        echo "Using release version $version"
-      
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Install cargo-make
-      run: cargo install cargo-make
-      
-    - name: Build Rust backend
-      run: cargo build --release --manifest-path rust-backend/Cargo.toml
-      
-    - name: Compile TypeScript
-      run: npm run compile
-      
-    - name: Package extension
-      run: |
-        $version = "${{ env.NEW_VERSION }}"
-        echo "Packaging version $version"
-        vsce package
-      
-    - name: Publish extension
-      if: env.TAG_CREATED == 'true' || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-      run: |
-        $version = if ("${{ env.NEW_VERSION }}") { "${{ env.NEW_VERSION }}" } else { "auto" }
-        echo "Publishing version: $version"
-        echo "Event: ${{ github.event_name }}"
-        echo "PR Merged: ${{ github.event.pull_request.merged }}"
-        
-        if ("${{ github.event_name }}" -eq "release" -and "${{ github.event.release.prerelease }}" -eq "true") {
-          vsce publish --pre-release --pat $env:VSCE_PAT
-        } else {
-          vsce publish --pat $env:VSCE_PAT
-        }
-        
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        
-    - name: Commit version bump and create tag
-      if: github.event_name != 'release'
-      run: |
-        $version = "${{ env.NEW_VERSION }}"
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Add package.json changes
-        git add package.json package-lock.json
-        
-        # Check if there are changes to commit
-        $status = git status --porcelain
-        if ($status) {
-          git commit -m "Bump version to $version [skip ci]"
-          echo "Version bumped to $version"
-          echo "HAS_CHANGES=true" >> $env:GITHUB_ENV
-        } else {
-          echo "No version changes to commit"
-          echo "HAS_CHANGES=false" >> $env:GITHUB_ENV
-        }
-        
-        # Check if tag already exists
-        $tagExists = git tag -l "v$version"
-        if (-not $tagExists) {
-          git tag "v$version"
-          echo "Created tag v$version"
-          echo "TAG_CREATED=true" >> $env:GITHUB_ENV
-        } else {
-          echo "Tag v$version already exists, skipping"
-          echo "TAG_CREATED=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Push changes and tags
-      if: github.event_name != 'release' && env.HAS_CHANGES == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      run: |
-        $version = "${{ env.NEW_VERSION }}"
-        
-        # Push the commit
-        git push origin main
-        echo "Pushed version bump commit to main"
-        
-    - name: Push tag
-      if: github.event_name != 'release' && env.TAG_CREATED == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      run: |
-        $version = "${{ env.NEW_VERSION }}"
-        git push origin "v$version"
-        echo "Pushed tag v$version"
-        
-    - name: Create Release for auto-publish (push)
-      if: github.event_name == 'push' && env.TAG_CREATED == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: "v${{ env.NEW_VERSION }}"
-        name: "Release v${{ env.NEW_VERSION }}"
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          *.vsix
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-        
-    - name: Create Release for PR merge
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && env.TAG_CREATED == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: "v${{ env.NEW_VERSION }}"
-        name: "Release v${{ env.NEW_VERSION }} (PR #${{ github.event.pull_request.number }})"
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          *.vsix
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        
-    - name: Create Release for manual publish
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'false' && env.TAG_CREATED == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: "v${{ env.NEW_VERSION }}"
-        name: "Release v${{ env.NEW_VERSION }}"
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        files: |
-          *.vsix
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        
-    - name: Create Pre-release for manual publish
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' && env.TAG_CREATED == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: "v${{ env.NEW_VERSION }}"
-        name: "Pre-release v${{ env.NEW_VERSION }}"
-        draft: false
-        prerelease: true
-        generate_release_notes: true
-        files: |
-          *.vsix
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        cache-key-prefix: 'rusty-refactor-v1'
+        create-github-release: 'true'
+        skip-tests: 'true'

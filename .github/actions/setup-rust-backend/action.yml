@@ -1,0 +1,81 @@
+name: 'Setup Rust Backend'
+description: 'Installs Rust, caches dependencies, and builds the Rust backend for rusty-refactor'
+author: 'RustyRoad'
+
+inputs:
+  rust-version:
+    description: 'Rust toolchain version to install'
+    required: false
+    default: 'stable'
+  cache-key-prefix:
+    description: 'Prefix for cache keys'
+    required: false
+    default: 'rust-backend'
+  
+outputs:
+  rust-version:
+    description: 'The version of Rust that was installed'
+    value: ${{ steps.toolchain.outputs.rustc-version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust toolchain
+      id: toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-version }}
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ inputs.cache-key-prefix }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-registry-
+          
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ inputs.cache-key-prefix }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-index-
+          
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: rust-backend/target
+        key: ${{ inputs.cache-key-prefix }}-cargo-build-${{ runner.os }}-${{ hashFiles('rust-backend/**/Cargo.toml', 'rust-backend/**/Cargo.lock', 'rust-backend/**/*.rs') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-cargo-build-${{ runner.os }}-
+          
+    - name: Install cargo-make
+      shell: pwsh
+      run: |
+        # Check if cargo-make is already installed
+        $cargoMakeVersion = cargo make --version 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "cargo-make already installed: $cargoMakeVersion"
+        } else {
+          Write-Host "Installing cargo-make..."
+          cargo install cargo-make --locked
+        }
+        
+    - name: Build Rust backend
+      shell: pwsh
+      run: |
+        Write-Host "Building Rust backend in release mode..."
+        cargo build --release --manifest-path rust-backend/Cargo.toml
+        
+        # Verify the build output exists
+        $dllPath = "rust-backend/target/release/rusty_refactor_worker.dll"
+        if (Test-Path $dllPath) {
+          Write-Host "✓ Build successful: $dllPath"
+          $fileInfo = Get-Item $dllPath
+          Write-Host "  Size: $($fileInfo.Length) bytes"
+          Write-Host "  Modified: $($fileInfo.LastWriteTime)"
+        } else {
+          Write-Error "Build failed: DLL not found at $dllPath"
+          exit 1
+        }
