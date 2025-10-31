@@ -9,7 +9,7 @@
     "url": "https://github.com/RustyRoad/rusty-refactor"
   },
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.105"
   },
   "categories": [
     "Programming Languages",
