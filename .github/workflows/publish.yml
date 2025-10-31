@@ -43,6 +43,9 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GH_TOKEN }}
       
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -88,6 +91,18 @@ jobs:
         echo "NEW_VERSION=$version" >> $env:GITHUB_ENV
         echo "Updated version to $version"
         
+    - name: Auto-increment version on PR merge
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      run: |
+        $currentVersion = node -p "require('./package.json').version"
+        $parts = $currentVersion.Split('.')
+        $patch = [int]$parts[2]
+        $parts[2] = ($patch + 1).ToString()
+        $newVersion = $parts -join '.'
+        npm version $newVersion --no-git-tag-version
+        echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
+        echo "Auto-incremented version from $currentVersion to $newVersion (PR merge)"
+        
     - name: Use release version
       if: github.event_name == 'release'
       run: |
@@ -115,6 +130,7 @@ jobs:
         vsce package
       
     - name: Publish extension
+      if: env.TAG_CREATED == 'true' || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       run: |
         $version = if ("${{ env.NEW_VERSION }}") { "${{ env.NEW_VERSION }}" } else { "auto" }
         echo "Publishing version: $version"
@@ -136,40 +152,54 @@ jobs:
         $version = "${{ env.NEW_VERSION }}"
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add package.json
+        
+        # Add package.json changes
+        git add package.json package-lock.json
         
         # Check if there are changes to commit
-        $hasChanges = git diff --staged --quiet; $LASTEXITCODE -ne 0
-        if ($hasChanges) {
+        $status = git status --porcelain
+        if ($status) {
           git commit -m "Bump version to $version [skip ci]"
           echo "Version bumped to $version"
+          echo "HAS_CHANGES=true" >> $env:GITHUB_ENV
         } else {
           echo "No version changes to commit"
+          echo "HAS_CHANGES=false" >> $env:GITHUB_ENV
         }
         
-        git tag "v$version"
-        echo "Created tag v$version"
+        # Check if tag already exists
+        $tagExists = git tag -l "v$version"
+        if (-not $tagExists) {
+          git tag "v$version"
+          echo "Created tag v$version"
+          echo "TAG_CREATED=true" >> $env:GITHUB_ENV
+        } else {
+          echo "Tag v$version already exists, skipping"
+          echo "TAG_CREATED=false" >> $env:GITHUB_ENV
+        }
         
     - name: Push changes and tags
-      if: github.event_name != 'release'
+      if: github.event_name != 'release' && env.HAS_CHANGES == 'true'
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         $version = "${{ env.NEW_VERSION }}"
         
-        # Push commits if they exist
-        $hasCommits = git log origin/main..HEAD --oneline
-        if ($hasCommits) {
-          git push origin main
-          echo "Pushed version bump commit to main"
-        }
+        # Push the commit
+        git push origin main
+        echo "Pushed version bump commit to main"
         
-        # Always push the tag
+    - name: Push tag
+      if: github.event_name != 'release' && env.TAG_CREATED == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      run: |
+        $version = "${{ env.NEW_VERSION }}"
         git push origin "v$version"
         echo "Pushed tag v$version"
         
     - name: Create Release for auto-publish (push)
-      if: github.event_name == 'push'
+      if: github.event_name == 'push' && env.TAG_CREATED == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ env.NEW_VERSION }}"
@@ -180,11 +210,11 @@ jobs:
         files: |
           *.vsix
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
         
     - name: Create Release for PR merge
-      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+      if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && env.TAG_CREATED == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ env.NEW_VERSION }}"
@@ -195,10 +225,10 @@ jobs:
         files: |
           *.vsix
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
         
     - name: Create Release for manual publish
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'false'
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'false' && env.TAG_CREATED == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ env.NEW_VERSION }}"
@@ -209,10 +239,10 @@ jobs:
         files: |
           *.vsix
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
         
     - name: Create Pre-release for manual publish
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true'
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' && env.TAG_CREATED == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: "v${{ env.NEW_VERSION }}"
@@ -223,4 +253,4 @@ jobs:
         files: |
           *.vsix
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
