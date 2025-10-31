@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
+import * as path from 'path'; // Used for string path manipulation only; use vscode.Uri for file system operations
 import { FileSearchProvider } from '../fileSearchProvider';
 import { checkModuleConversion, isNativeModuleAvailable } from '../nativeBridge';
 
@@ -11,6 +10,7 @@ export class ModuleExtractorPanel {
     private _panel: vscode.WebviewPanel | undefined;
     private _disposables: vscode.Disposable[] = [];
     private _fileSearchProvider: FileSearchProvider;
+    private _workspaceFolder: vscode.WorkspaceFolder;
     private _currentPath: string = 'src';
     private _moduleName: string = '';
     private _selectedCode: string = '';
@@ -84,6 +84,7 @@ export class ModuleExtractorPanel {
     ) {
         this._panel = panel;
         this._fileSearchProvider = new FileSearchProvider(workspaceFolder);
+        this._workspaceFolder = workspaceFolder;
         
         // Listen for when the panel is disposed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
@@ -144,7 +145,11 @@ export class ModuleExtractorPanel {
     
     private async _confirmSelection() {
         if (this._resolveSelection) {
-            this._resolveSelection(path.join(this._currentPath, `${this._moduleName}.rs`));
+            // Use POSIX join for VS Code compatibility
+            const modulePath = this._currentPath.endsWith('/') || this._currentPath.endsWith('\\')
+                ? `${this._currentPath}${this._moduleName}.rs`
+                : `${this._currentPath}/${this._moduleName}.rs`;
+            this._resolveSelection(modulePath);
             this._resolveSelection = undefined;
         }
         this._panel?.dispose();
@@ -158,128 +163,114 @@ export class ModuleExtractorPanel {
         this._panel?.dispose();
     }
     
-    private async _loadDirectoryItems(currentPath: string) {
+        const segments = currentPath.split(path.sep).filter(Boolean);
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const rustyRoadMode = config.get<boolean>('rustyRoadMode', true);
-        
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) {
-            console.error('No workspace folder found');
-            return;
-        }
-        
+        const baseUri = this._workspaceFolder.uri;
+        const segments = currentPath.split(/[\\/]/).filter(Boolean);
+        const directoryUri = segments.length > 0 ? vscode.Uri.joinPath(baseUri, ...segments) : baseUri;
+
+        const directories: any[] = [];
+        const moduleFiles: any[] = [];
+        const suggestions: any[] = [];
+
         try {
-            // Get file system entries
-            const fullPath = path.join(workspaceFolder.uri.fsPath, currentPath);
-            let directories: any[] = [];
-            let moduleFiles: any[] = [];
-            let suggestions: any[] = [];
-            
-            console.log(`Loading directory items for path: ${fullPath}`);
-            
-            // Get items using FileSearchProvider logic
-            if (!fs.existsSync(fullPath)) {
-                // Directory doesn't exist, offer to create suggested directories
-                if (rustyRoadMode && currentPath === 'src') {
-                    const suggestedDirs = ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'];
-                    for (const suggestedDir of suggestedDirs) {
-                        suggestions.push({
-                            name: suggestedDir,
-                            type: 'suggestion',
-                            path: path.join(currentPath, suggestedDir),
-                            icon: 'new-folder'
-                        });
-                    }
-                }
-            } else {
-                // Read existing directories and files
-                const entries = fs.readdirSync(fullPath, { withFileTypes: true });
-                
-                // Check for module files that could be converted
-                if (this._moduleName && isNativeModuleAvailable()) {
-                    const moduleFilesFiltered = entries.filter(entry => 
-                        entry.isFile() && 
-                        entry.name.endsWith('.rs') && 
-                        entry.name !== 'mod.rs' &&
-                        entry.name !== 'lib.rs' &&
-                        entry.name !== 'main.rs'
-                    );
-                    
-                    for (const file of moduleFilesFiltered) {
-                        const fileModuleName = file.name.slice(0, -3);
-                        try {
-                            const conversionInfo = await checkModuleConversion(
-                                workspaceFolder.uri.fsPath,
-                                path.join(currentPath, `${fileModuleName}.rs`),
-                                fileModuleName
-                            );
-                            
-                            if (conversionInfo.needs_conversion) {
-                                moduleFiles.push({
-                                    name: fileModuleName,
-                                    type: 'module-file',
-                                    path: path.join(currentPath, fileModuleName),
-                                    icon: 'file-code',
-                                    description: 'Can be converted to folder',
-                                    detail: `Convert ${fileModuleName}.rs to ${fileModuleName}/mod.rs`
-                                });
-                            }
-                        } catch (error) {
-                            console.error('Error checking module conversion:', error);
+            const entries = await vscode.workspace.fs.readDirectory(directoryUri);
+
+            // Check for module files that could be converted
+            if (this._moduleName && isNativeModuleAvailable()) {
+                const moduleCandidates = entries.filter(([name, type]) =>
+                    type === vscode.FileType.File &&
+                    name.endsWith('.rs') &&
+                    name !== 'mod.rs' &&
+                    name !== 'lib.rs' &&
+                    name !== 'main.rs'
+                );
+
+                for (const [fileName] of moduleCandidates) {
+                    const fileModuleName = fileName.slice(0, -3);
+                    try {
+                        const conversionInfo = await checkModuleConversion(
+                            this._workspaceFolder.uri.fsPath,
+                            `${currentPath}/${fileModuleName}.rs`,
+                            fileModuleName
+                        );
+
+                        if (conversionInfo.needs_conversion) {
+                            moduleFiles.push({
+                                name: fileModuleName,
+                                type: 'module-file',
+                                path: `${currentPath}/${fileModuleName}`,
+                                icon: 'file-code',
+                                description: 'Can be converted to folder',
+                                detail: `Convert ${fileModuleName}.rs to ${fileModuleName}/mod.rs`
+                            });
                         }
-                    }
-                }
-                
-                // Get existing directories
-                for (const entry of entries) {
-                    if (entry.isDirectory() && 
-                        !entry.name.startsWith('.') && 
-                        entry.name !== 'target' && 
-                        entry.name !== 'node_modules') {
-                        
-                        const itemPath = path.join(currentPath, entry.name);
-                        const isRustyRoadDir = rustyRoadMode && ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'].includes(entry.name);
-                        
-                        directories.push({
-                            name: entry.name,
-                            type: 'directory',
-                            path: itemPath,
-                            icon: 'folder',
-                            description: isRustyRoadDir ? 'RustyRoad convention' : ''
-                        });
+                    } catch (error) {
+                        console.error('Error checking module conversion:', error);
                     }
                 }
             }
-            
-            // Sort directories
-            directories.sort((a, b) => a.name.localeCompare(b.name));
-            
-            // Send data to webview
-            const updateMessage = {
-                command: 'updateDirectory',
-                currentPath,
-                parentPath: path.dirname(currentPath),
-                directories,
-                moduleFiles,
-                suggestions,
-                breadcrumb: this._generateBreadcrumb(currentPath)
-            };
-            
-            console.log('Sending updateDirectory message:', updateMessage);
-            this._panel?.webview.postMessage(updateMessage);
-            
+
+            for (const [name, type] of entries) {
+                if (type !== vscode.FileType.Directory) {
+                    continue;
+                }
+
+                if (name.startsWith('.') || name === 'target' || name === 'node_modules') {
+                    continue;
+                }
+
+                const itemPath = `${currentPath}/${name}`;
+                const isRustyRoadDir = rustyRoadMode && ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'].includes(name);
+
+                directories.push({
+                    name,
+                    type: 'directory',
+                    path: itemPath,
+                    icon: 'folder',
+                    description: isRustyRoadDir ? 'RustyRoad convention' : ''
+                });
+            }
         } catch (error) {
-            console.error('Error loading directory items:', error);
+            // Directory may not exist yet; offer suggestions for root path
+            console.warn(`Directory ${currentPath} not found, providing suggestions`, error);
         }
+
+        if (rustyRoadMode && currentPath === 'src' && directories.length === 0) {
+            const suggestedDirs = ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'];
+            for (const suggestedDir of suggestedDirs) {
+                suggestions.push({
+                    name: suggestedDir,
+                    type: 'suggestion',
+                    path: `${currentPath}/${suggestedDir}`,
+                    icon: 'new-folder'
+                });
+            }
+        }
+
+        directories.sort((a, b) => a.name.localeCompare(b.name));
+
+        const updateMessage = {
+            command: 'updateDirectory',
+            currentPath,
+            parentPath: currentPath.includes(path.sep) ? currentPath.slice(0, currentPath.lastIndexOf(path.sep)) : '',
+            directories,
+            moduleFiles,
+            suggestions,
+            breadcrumb: this._generateBreadcrumb(currentPath)
+        };
+
+        this._panel?.webview.postMessage(updateMessage);
     }
     
     private _generateBreadcrumb(currentPath: string): string[] {
-        const parts = currentPath.split(path.sep);
+        const parts = currentPath.split(/[\\/]/).filter(Boolean);
         const breadcrumb: string[] = [];
         let pathSoFar = '';
         
         for (const part of parts) {
-            pathSoFar = pathSoFar ? path.join(pathSoFar, part) : part;
+            pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part;
             breadcrumb.push(part);
         }
         
@@ -386,7 +377,7 @@ export class ModuleExtractorPanel {
                                     <li>Select a destination directory from the file tree</li>
                                     <li>Click "Create module here" to extract to the current directory</li>
                                     <li>Click on any directory to navigate into it</li>
-                                    <li>Module files (with file icon) can be converted to_folder structure</li>
+                                    <li>Module files (with file icon) can be converted to folder structure</li>
                                 </ol>
                             </div>
                         </div>

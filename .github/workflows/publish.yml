@@ -1,4 +1,4 @@
-name: Publish Extension (RustyRoad)
+name: Publish Extension
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 0.2.6, auto, patch, minor, major)'
+        description: 'Version to publish (e.g., 0.2.6)'
         required: false
         default: 'auto'
       prerelease:
@@ -35,15 +35,91 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GH_TOKEN }}
       
-    - name: 🦀 Publish with RustyRoad
-      uses: ./.github/actions/rustyroad-publish
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
       with:
-        version-bump: ${{ github.event.inputs.version || 'auto' }}
-        prerelease: ${{ github.event.inputs.prerelease || 'false' }}
-        vsce-pat: ${{ secrets.VSCE_PAT }}
-        github-token: ${{ secrets.GH_TOKEN }}
-        rust-version: 'stable'
         node-version: '20'
-        cache-key-prefix: 'rusty-refactor-v1'
-        create-github-release: 'true'
-        skip-tests: 'true'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm install
+      
+    - name: Auto-increment version
+      run: |
+        $versionInput = "${{ github.event.inputs.version || 'auto' }}"
+        $currentVersion = node -p "require('./package.json').version"
+        
+        if ($versionInput -match '^\d+\.\d+\.\d+$') {
+          $newVersion = $versionInput
+        } else {
+          $parts = $currentVersion.Split('.')
+          $patch = [int]$parts[2]
+          $parts[2] = ($patch + 1).ToString()
+          $newVersion = $parts -join '.'
+        }
+        
+        npm version $newVersion --no-git-tag-version
+        if ($newVersion -match '^\d+\.\d+\.\d+$') {
+          echo "NEW_VERSION=$newVersion" >> $env:GITHUB_ENV
+          echo "Bumped version to $newVersion"
+        } else {
+          Write-Error "Invalid version format: $newVersion"
+          exit 1
+        }
+        
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          rust-backend/target
+        key: rust-${{ runner.os }}-${{ hashFiles('rust-backend/**/Cargo.toml') }}
+        
+    - name: Build Rust backend
+      run: cargo build --release --manifest-path rust-backend/Cargo.toml
+      
+    - name: Compile TypeScript
+      run: npm run compile
+      
+    - name: Package extension
+      run: |
+        npm install -g @vscode/vsce
+        vsce package
+      
+    - name: Publish extension
+      run: |
+        if ("${{ github.event.inputs.prerelease }}" -eq "true") {
+          vsce publish --pre-release --pat $env:VSCE_PAT
+        } else {
+          vsce publish --pat $env:VSCE_PAT
+        }
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        
+    - name: Commit and tag
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add package.json package-lock.json
+        git commit -m "Bump version to $env:NEW_VERSION [skip ci]" || echo "No changes to commit"
+        git tag "v$env:NEW_VERSION"
+        git push origin main
+        git push origin "v$env:NEW_VERSION"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "v${{ env.NEW_VERSION }}"
+        name: "Release v${{ env.NEW_VERSION }}"
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease || false }}
+        generate_release_notes: true
+        files: '*.vsix'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
