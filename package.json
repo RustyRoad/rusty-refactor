@@ -9,7 +9,7 @@
     "url": "https://github.com/RustyRoad/rusty-refactor"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.105.0"
   },
   "categories": [
     "Programming Languages",
@@ -125,7 +125,7 @@
   },
   "devDependencies": {  
     "@types/node": "24.9.2",
-    "@types/vscode": "1.105",
+    "@types/vscode": "1.105.0",
     "@vscode/vsce": "3.6.2",
     "@typescript-eslint/eslint-plugin": "8.46.2",
     "@typescript-eslint/parser": "8.46.2",
