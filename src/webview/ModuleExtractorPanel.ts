@@ -5,6 +5,21 @@ import { checkModuleConversion, isNativeModuleAvailable } from '../nativeBridge'
 
 export class ModuleExtractorPanel {
     public static readonly viewType = 'moduleExtractor';
+    private static readonly RUSTY_ROAD_DIRECTORIES: readonly string[] = [
+        'controllers',
+        'models',
+        'views',
+        'services',
+        'middleware',
+        'helpers',
+        'lib',
+        'utils',
+        'config',
+        'routes',
+        'handlers',
+        'repositories',
+        'domain'
+    ];
     private static instance?: ModuleExtractorPanel;
     
     private _panel: vscode.WebviewPanel | undefined;
@@ -145,10 +160,7 @@ export class ModuleExtractorPanel {
     
     private async _confirmSelection() {
         if (this._resolveSelection) {
-            // Use POSIX join for VS Code compatibility
-            const modulePath = this._currentPath.endsWith('/') || this._currentPath.endsWith('\\')
-                ? `${this._currentPath}${this._moduleName}.rs`
-                : `${this._currentPath}/${this._moduleName}.rs`;
+            const modulePath = this._joinPath(this._currentPath, `${this._moduleName}.rs`);
             this._resolveSelection(modulePath);
             this._resolveSelection = undefined;
         }
@@ -162,22 +174,28 @@ export class ModuleExtractorPanel {
         }
         this._panel?.dispose();
     }
-    
-        const segments = currentPath.split(path.sep).filter(Boolean);
+    private async _loadDirectoryItems(currentPath: string): Promise<void> {
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const rustyRoadMode = config.get<boolean>('rustyRoadMode', true);
-        const baseUri = this._workspaceFolder.uri;
-        const segments = currentPath.split(/[\\/]/).filter(Boolean);
-        const directoryUri = segments.length > 0 ? vscode.Uri.joinPath(baseUri, ...segments) : baseUri;
 
-        const directories: any[] = [];
-        const moduleFiles: any[] = [];
-        const suggestions: any[] = [];
+        const directories: Array<{ name: string; type: string; path: string; icon: string; description?: string }> = [];
+        const moduleFiles: Array<{ name: string; type: string; path: string; icon: string; description: string; detail: string }> = [];
+        const suggestions: Array<{ name: string; type: string; path: string; icon: string }> = [];
+
+        const directoryUri = this._toUri(currentPath);
+        let entries: readonly [string, vscode.FileType][] = [];
+        let directoryExists = true;
 
         try {
-            const entries = await vscode.workspace.fs.readDirectory(directoryUri);
+            entries = await vscode.workspace.fs.readDirectory(directoryUri);
+        } catch (error) {
+            directoryExists = false;
+            if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) {
+                console.warn(`Error reading directory ${currentPath}:`, error);
+            }
+        }
 
-            // Check for module files that could be converted
+        if (directoryExists) {
             if (this._moduleName && isNativeModuleAvailable()) {
                 const moduleCandidates = entries.filter(([name, type]) =>
                     type === vscode.FileType.File &&
@@ -192,7 +210,7 @@ export class ModuleExtractorPanel {
                     try {
                         const conversionInfo = await checkModuleConversion(
                             this._workspaceFolder.uri.fsPath,
-                            `${currentPath}/${fileModuleName}.rs`,
+                            this._joinPath(currentPath, `${fileModuleName}.rs`),
                             fileModuleName
                         );
 
@@ -200,7 +218,7 @@ export class ModuleExtractorPanel {
                             moduleFiles.push({
                                 name: fileModuleName,
                                 type: 'module-file',
-                                path: `${currentPath}/${fileModuleName}`,
+                                path: this._joinPath(currentPath, fileModuleName),
                                 icon: 'file-code',
                                 description: 'Can be converted to folder',
                                 detail: `Convert ${fileModuleName}.rs to ${fileModuleName}/mod.rs`
@@ -221,8 +239,8 @@ export class ModuleExtractorPanel {
                     continue;
                 }
 
-                const itemPath = `${currentPath}/${name}`;
-                const isRustyRoadDir = rustyRoadMode && ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'].includes(name);
+                const itemPath = this._joinPath(currentPath, name);
+                const isRustyRoadDir = rustyRoadMode && this._isRustyRoadDirectory(name);
 
                 directories.push({
                     name,
@@ -232,18 +250,14 @@ export class ModuleExtractorPanel {
                     description: isRustyRoadDir ? 'RustyRoad convention' : ''
                 });
             }
-        } catch (error) {
-            // Directory may not exist yet; offer suggestions for root path
-            console.warn(`Directory ${currentPath} not found, providing suggestions`, error);
         }
 
-        if (rustyRoadMode && currentPath === 'src' && directories.length === 0) {
-            const suggestedDirs = ['controllers', 'models', 'views', 'services', 'middleware', 'helpers', 'lib', 'utils', 'config', 'routes', 'handlers', 'repositories', 'domain'];
-            for (const suggestedDir of suggestedDirs) {
+        if (rustyRoadMode && currentPath === 'src' && (directories.length === 0 || !directoryExists)) {
+            for (const suggestedDir of this._rustyRoadSuggestions()) {
                 suggestions.push({
                     name: suggestedDir,
                     type: 'suggestion',
-                    path: `${currentPath}/${suggestedDir}`,
+                    path: this._joinPath(currentPath, suggestedDir),
                     icon: 'new-folder'
                 });
             }
@@ -254,7 +268,7 @@ export class ModuleExtractorPanel {
         const updateMessage = {
             command: 'updateDirectory',
             currentPath,
-            parentPath: currentPath.includes(path.sep) ? currentPath.slice(0, currentPath.lastIndexOf(path.sep)) : '',
+            parentPath: this._parentPath(currentPath),
             directories,
             moduleFiles,
             suggestions,
@@ -262,6 +276,56 @@ export class ModuleExtractorPanel {
         };
 
         this._panel?.webview.postMessage(updateMessage);
+    }
+
+    private _splitPath(pathValue: string): string[] {
+        return pathValue
+            .split(/[\\/]/)
+            .map((segment) => segment.trim())
+            .filter(Boolean);
+    }
+
+    private _normalizePath(relativePath: string): string {
+        const segments = this._splitPath(relativePath);
+        if (segments.length === 0) {
+            return '';
+        }
+        return path.posix.join(...segments);
+    }
+
+    private _joinPath(...parts: string[]): string {
+        const segments = parts.flatMap((part) => this._splitPath(part));
+        if (segments.length === 0) {
+            return '';
+        }
+        return path.posix.join(...segments);
+    }
+
+    private _parentPath(relativePath: string): string {
+        const normalized = this._normalizePath(relativePath);
+        if (!normalized || normalized === 'src') {
+            return 'src';
+        }
+
+        const segments = this._splitPath(normalized);
+        if (segments.length <= 1) {
+            return 'src';
+        }
+
+        return segments.slice(0, -1).join('/');
+    }
+
+    private _toUri(relativePath: string): vscode.Uri {
+        const segments = this._splitPath(relativePath);
+        return vscode.Uri.joinPath(this._workspaceFolder.uri, ...segments);
+    }
+
+    private _isRustyRoadDirectory(name: string): boolean {
+        return ModuleExtractorPanel.RUSTY_ROAD_DIRECTORIES.includes(name);
+    }
+
+    private _rustyRoadSuggestions(): readonly string[] {
+        return ModuleExtractorPanel.RUSTY_ROAD_DIRECTORIES;
     }
     
     private _generateBreadcrumb(currentPath: string): string[] {
