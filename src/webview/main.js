@@ -34,6 +34,10 @@
     // Handle messages from extension
     window.addEventListener('message', event => {
         const message = event.data;
+        if (!message || typeof message !== 'object' || typeof message.command !== 'string') {
+            console.warn('Received malformed message:', message);
+            return;
+        }
         console.log('Webview received message:', message.command, message);
         
         switch (message.command) {
