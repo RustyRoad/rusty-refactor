@@ -52,9 +52,14 @@ export class AIDocGenerator {
                     9.  Keep descriptions informative yet concise.
                     10. Adhere strictly to rustdoc conventions.
                     11. **Crucially, do not modify the actual Rust code.** Only add or enhance documentation comments.
-                    12. Return the complete code with enhanced documentation.
-                    13. Maintain the original code's structure and formatting exactly.
-                    14. **Do NOT wrap your output in markdown code blocks (\`\`\`rust).** Return raw Rust code only.`
+                    12. **NEVER replace function bodies, struct fields, or any code with placeholder comments**
+                    13. **NEVER use phrases like "remains unchanged", "implementation remains", "Field definitions remain", etc.**
+                    14. **PRESERVE ALL function bodies, struct fields, enum variants, and executable code EXACTLY as-is**
+                    15. Return the complete code with enhanced documentation.
+                    16. Maintain the original code's structure and formatting exactly.
+                    17. **Do NOT wrap your output in markdown code blocks (\`\`\`rust).** Return raw Rust code only.
+                    
+                    CRITICAL: Your output MUST contain ALL the original code PLUS documentation comments. Nothing should be removed or replaced with placeholders.`
                 ),
                 vscode.LanguageModelChatMessage.User(
                     `Module name: ${moduleName}\n\nEnhance the documentation in this Rust code:\n\n${code}`
@@ -81,6 +86,26 @@ export class AIDocGenerator {
 
             // Clean up any markdown formatting from the response
             const cleaned = this.cleanMarkdownCodeBlocks(documentedCode);
+            
+            // Quick validation: Check for placeholder comments that indicate code was deleted
+            if (cleaned.includes('remains unchanged') || 
+                cleaned.includes('implementation remains') ||
+                cleaned.includes('Field definitions remain') ||
+                cleaned.includes('// Function implementation') ||
+                cleaned.includes('// Field definitions')) {
+                console.error('AI generated placeholder comments instead of preserving code - rejecting output');
+                return null; // Return null to use original undocumented code
+            }
+
+            // Check that output isn't drastically shorter (which would indicate deleted code)
+            const originalLines = code.split('\n').filter(l => l.trim()).length;
+            const cleanedLines = cleaned.split('\n').filter(l => l.trim()).length;
+            const lineRatio = cleanedLines / originalLines;
+
+            if (lineRatio < 0.7) {
+                console.error(`AI output is too short (${cleanedLines} vs ${originalLines} non-empty lines) - likely deleted code`);
+                return null; // Return null to use original undocumented code
+            }
             
             // First: Use LLM as a judge to validate the documentation
             const judgeResult = await this.validateWithLLMJudge(cleaned, code, model);
@@ -273,6 +298,9 @@ export class AIDocGenerator {
                     6. **Complete Code**: All functions, structs, and other items from original must be present
                     7. **Balanced Braces**: All { and } must be balanced
                     8. **No #[doc] attributes**: Only /// and //! comments should be used, not #[doc = "..."] attributes
+                    9. **No Placeholder Comments**: REJECT if code contains "remains unchanged", "implementation remains", "Field definitions remain", or similar placeholders
+                    10. **Function Bodies Present**: All function bodies must be complete with actual code, not replaced with comments
+                    11. **Struct Fields Present**: All struct fields must be present with their types, not replaced with comments
                     
                     Respond with JSON in this exact format:
                     {
@@ -485,12 +513,15 @@ ${documentedCode}
                     1. NEVER modify the actual Rust code - only add documentation comments
                     2. NEVER put /// on the same line as code keywords (pub, fn, struct, etc.)
                     3. NEVER add /// inside code examples
-                    4. Keep all original code exactly as-is
-                    5. Only add //! module comments at the top and /// item comments above items
-                    6. Ensure all braces and parentheses remain balanced
-                    7. Do NOT use #[doc = "..."] attributes, only use /// and //! comments
+                    4. NEVER replace function bodies with placeholder comments like "remains unchanged" or "implementation remains"
+                    5. NEVER replace struct fields with placeholder comments like "Field definitions remain"
+                    6. Keep ALL original code exactly as-is - every function body, struct field, enum variant, etc.
+                    7. Only add //! module comments at the top and /// item comments above items
+                    8. Ensure all braces and parentheses remain balanced
+                    9. Do NOT use #[doc = "..."] attributes, only use /// and //! comments
+                    10. Return the COMPLETE code with ALL original logic preserved
                     
-                    Add documentation comments to this Rust code, being very careful not to break the syntax:`
+                    Add documentation comments to this Rust code, being very careful not to break the syntax or remove any code:`
                 ),
                 vscode.LanguageModelChatMessage.User(
                     `Module name: ${moduleName}\n\nCode:\n\n${code}`
