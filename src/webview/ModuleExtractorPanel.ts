@@ -21,6 +21,25 @@ export class ModuleExtractorPanel {
         'domain'
     ];
     private static instance?: ModuleExtractorPanel;
+    private static outputChannel?: vscode.OutputChannel;
+    
+    /**
+     * Sets the output channel for logging messages from ModuleExtractorPanel.
+     * 
+     * This must be called during extension activation to enable output channel logging.
+     * 
+     * @param channel The VS Code OutputChannel to use for logging.
+     */
+    public static setOutputChannel(channel: vscode.OutputChannel) {
+        ModuleExtractorPanel.outputChannel = channel;
+    }
+    
+    private static log(message: string) {
+        if (ModuleExtractorPanel.outputChannel) {
+            ModuleExtractorPanel.outputChannel.appendLine(`[ModuleExtractorPanel] ${message}`);
+        }
+        console.log(`[ModuleExtractorPanel] ${message}`);
+    }
     
     private _panel: vscode.WebviewPanel | undefined;
     private _disposables: vscode.Disposable[] = [];
@@ -43,12 +62,15 @@ export class ModuleExtractorPanel {
         selectedCode: string,
         analysisResult: any
     ): ModuleExtractorPanel {
+        ModuleExtractorPanel.log(`createOrShow called for module: ${moduleName}`);
         if (ModuleExtractorPanel.instance) {
+            ModuleExtractorPanel.log('Reusing existing panel instance');
             ModuleExtractorPanel.instance._panel?.reveal();
             ModuleExtractorPanel.instance.updateData(moduleName, selectedCode, analysisResult);
             return ModuleExtractorPanel.instance;
         }
         
+        ModuleExtractorPanel.log('Creating new webview panel');
         const panel = vscode.window.createWebviewPanel(
             ModuleExtractorPanel.viewType,
             'Module Extractor',
@@ -59,6 +81,7 @@ export class ModuleExtractorPanel {
             }
         );
         
+        ModuleExtractorPanel.log('Webview panel created successfully');
         const provider = new ModuleExtractorPanel(panel, extensionUri, workspaceFolder);
         provider.updateData(moduleName, selectedCode, analysisResult);
         ModuleExtractorPanel.instance = provider;
@@ -73,15 +96,18 @@ export class ModuleExtractorPanel {
         workspaceFolder: vscode.WorkspaceFolder,
         extensionUri: vscode.Uri
     ): Promise<string | undefined> {
+        ModuleExtractorPanel.log(`show called for module: ${moduleName}`);
         if (!ModuleExtractorPanel.instance) {
             ModuleExtractorPanel.createOrShow(extensionUri, workspaceFolder, moduleName, selectedCode, analysisResult);
         } else {
+            ModuleExtractorPanel.log('Updating existing panel');
             ModuleExtractorPanel.instance.updateData(moduleName, selectedCode, analysisResult);
             ModuleExtractorPanel.instance._panel?.reveal();
         }
         
         // Create a new promise for this selection
         if (ModuleExtractorPanel.instance) {
+            ModuleExtractorPanel.log('Creating selection promise');
             ModuleExtractorPanel.instance._selectionPromise = new Promise((resolve) => {
                 ModuleExtractorPanel.instance!._resolveSelection = resolve;
             });
@@ -90,6 +116,7 @@ export class ModuleExtractorPanel {
         }
         
         // Fallback if instance creation failed
+        ModuleExtractorPanel.log('ERROR: Failed to create panel instance');
         return Promise.reject(new Error('Failed to create webview panel'));
     }
 
@@ -108,18 +135,23 @@ export class ModuleExtractorPanel {
         // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
             async (message) => {
+                ModuleExtractorPanel.log(`Received message from webview: ${message.command}`);
                 console.log('Received message from webview:', message);
                 switch (message.command) {
                     case 'selectDirectory':
+                        ModuleExtractorPanel.log(`Selecting directory: ${message.path}`);
                         this._selectDirectory(message.path);
                         break;
                     case 'confirmSelection':
+                        ModuleExtractorPanel.log('Confirming selection');
                         this._confirmSelection();
                         break;
                     case 'cancel':
+                        ModuleExtractorPanel.log('Cancelling');
                         this._cancel();
                         break;
                     case 'ready':
+                        ModuleExtractorPanel.log('Webview is ready, loading initial data');
                         console.log('Webview is ready, loading initial data');
                         await this._loadInitialData();
                         break;
@@ -146,6 +178,7 @@ export class ModuleExtractorPanel {
     }
 
     private async _loadInitialData() {
+        ModuleExtractorPanel.log(`Loading initial data for path: ${this._currentPath}`);
         console.log('Loading initial data for path:', this._currentPath);
         
         // Update current path display
@@ -156,6 +189,7 @@ export class ModuleExtractorPanel {
         
         // Load directory items
         await this._loadDirectoryItems(this._currentPath);
+        ModuleExtractorPanel.log('Initial data loaded successfully');
         console.log('Initial data loaded successfully');
     }
     
@@ -181,24 +215,29 @@ export class ModuleExtractorPanel {
         this._panel?.dispose();
     }
     private async _loadDirectoryItems(currentPath: string): Promise<void> {
+        ModuleExtractorPanel.log(`Loading directory items for: ${currentPath}`);
         console.log(`Loading directory items for: ${currentPath}`);
         
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const rustyRoadMode = config.get<boolean>('rustyRoadMode', true);
+        ModuleExtractorPanel.log(`RustyRoad mode: ${rustyRoadMode}`);
 
         const directories: Array<{ name: string; type: string; path: string; icon: string; description?: string }> = [];
         const moduleFiles: Array<{ name: string; type: string; path: string; icon: string; description: string; detail: string }> = [];
         const suggestions: Array<{ name: string; type: string; path: string; icon: string }> = [];
 
         const directoryUri = this._toUri(currentPath);
+        ModuleExtractorPanel.log(`Directory URI: ${directoryUri.fsPath}`);
         let entries: readonly [string, vscode.FileType][] = [];
         let directoryExists = true;
 
         try {
             entries = await vscode.workspace.fs.readDirectory(directoryUri);
+            ModuleExtractorPanel.log(`Successfully read ${entries.length} entries from ${currentPath}`);
             console.log(`Successfully read ${entries.length} entries from ${currentPath}`);
         } catch (error) {
             directoryExists = false;
+            ModuleExtractorPanel.log(`Error reading directory ${currentPath}: ${error}`);
             console.error(`Error reading directory ${currentPath}:`, error);
             if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) {
                 vscode.window.showErrorMessage(`Failed to read directory: ${currentPath}`);
@@ -285,6 +324,7 @@ export class ModuleExtractorPanel {
             breadcrumb: this._generateBreadcrumb(currentPath)
         };
 
+        ModuleExtractorPanel.log(`Sending updateDirectory message with ${directories.length} dirs, ${moduleFiles.length} files, ${suggestions.length} suggestions`);
         console.log('Sending updateDirectory message with data:', updateMessage);
         this._panel?.webview.postMessage(updateMessage);
     }

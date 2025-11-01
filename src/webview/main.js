@@ -34,6 +34,11 @@
     // Handle messages from extension
     window.addEventListener('message', event => {
         const message = event.data;
+        if (!message || typeof message !== 'object' || typeof message.command !== 'string') {
+            console.warn('Received malformed message:', message);
+            return;
+        }
+        console.log('Webview received message:', message.command, message);
         
         switch (message.command) {
             case 'updateData':
@@ -45,6 +50,8 @@
             case 'updateCurrentPath':
                 updateCurrentPathDisplay(message.currentPath);
                 break;
+            default:
+                console.warn('Unknown message command:', message.command);
         }
     });
     
@@ -118,17 +125,16 @@
     function updateFileTree(data) {
         const treeContent = document.getElementById('file-tree-content');
         if (!treeContent) {
-            console.error('file-tree-content element not found');
+            console.error('updateFileTree: file-tree-content element not found');
             return;
         }
         
         console.log('Updating file tree with data:', data);
-        treeContent.innerHTML = '';
         
         // Show loading indicator
-        treeContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+        treeContent.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
         
-        // Small delay to ensure loading indicator shows
+        // Small delay to ensure loading indicator shows, then render
         setTimeout(() => {
             renderFileTree(data);
         }, 10);
@@ -136,12 +142,16 @@
     
     function renderFileTree(data) {
         const treeContent = document.getElementById('file-tree-content');
-        if (!treeContent) return;
+        if (!treeContent) {
+            console.error('renderFileTree: file-tree-content element not found');
+            return;
+        }
         
         console.log('Rendering file tree with data:', data);
         
         // Add parent directory option if not at root
         if (data.currentPath !== 'src') {
+            console.log('Adding parent directory item');
             const parentItem = createTreeItem({
                 name: '..',
                 path: data.parentPath,
@@ -153,6 +163,7 @@
         }
         
         // Add create here option
+        console.log('Adding "Create module here" item');
         const createItem = createTreeItem({
             name: 'Create module here',
             path: data.currentPath,
