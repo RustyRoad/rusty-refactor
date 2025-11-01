@@ -18,15 +18,20 @@ import { AIDocGenerator } from './aiDocGenerator';
 
 export class ModuleExtractor {
     private aiDocGenerator: AIDocGenerator;
+    private originalSelection: vscode.Selection;
 
     constructor(
         private document: vscode.TextDocument,
         private analysis: AnalysisResult,
         private moduleName: string,
         private modulePath: string,
-        private rustAnalyzer?: RustAnalyzerIntegration
+        private rustAnalyzer?: RustAnalyzerIntegration,
+        originalSelection?: vscode.Selection
     ) {
         this.aiDocGenerator = new AIDocGenerator();
+        // Store the original selection range to use for code replacement
+        // This prevents issues when multiple extractions happen in sequence
+        this.originalSelection = originalSelection || vscode.window.activeTextEditor!.selection;
     }
 
     async extract(): Promise<void> {
@@ -835,22 +840,24 @@ export class ModuleExtractor {
             return;
         }
         
-        const selection = editor.selection;
+        // Use the stored original selection, not the current editor selection
+        // This ensures we replace the correct code even if multiple extractions happened
+        const rangeToReplace = this.originalSelection;
         let comment: string;
         
         if (useAISummary) {
-            // Generate AI-powered summary
+            // Generate AI-powered summary with normalized path
             comment = await this.aiDocGenerator.generateExtractionSummary(
                 this.analysis.selectedCode,
                 this.moduleName,
-                this.modulePath
+                this.normalizePath(this.modulePath)
             );
         } else {
-            comment = `// Code extracted to ${this.modulePath}\n// Available as: ${this.moduleName}::*`;
+            comment = `// Code extracted to ${this.normalizePath(this.modulePath)}\n// Available as: ${this.moduleName}::*`;
         }
         
         await editor.edit(editBuilder => {
-            editBuilder.replace(selection, comment);
+            editBuilder.replace(rangeToReplace, comment);
         });
     }
 
@@ -923,5 +930,18 @@ export class ModuleExtractor {
 
     private capitalizeFirstLetter(str: string): string {
         return str.charAt(0).toUpperCase() + str.slice(1).replace(/_/g, ' ');
+    }
+
+    /**
+     * Normalize file paths for consistent display across platforms.
+     * Converts to forward slashes and ensures relative path from workspace.
+     */
+    private normalizePath(filePath: string): string {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+            const relativePath = path.relative(workspaceFolder.uri.fsPath, filePath);
+            return relativePath.replace(/\\/g, '/');
+        }
+        return filePath.replace(/\\/g, '/');
     }
 }
