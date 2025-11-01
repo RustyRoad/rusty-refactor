@@ -45,6 +45,83 @@
         "title": "Rusty Refactor: Extract to Module (Custom Path)"
       }
     ],
+    "languageModelTools": [
+      {
+        "name": "rustyRefactor_extract_to_module",
+        "displayName": "Extract Rust Code to Module",
+        "modelDescription": "Extracts selected Rust code from a source file and creates a new module file with intelligent import handling, impl block preservation, and automatic parent module registration. This tool should be used when refactoring Rust code to improve modularity and organization. It handles complex scenarios including: extracting methods from impl blocks (preserves the impl wrapper), copying all necessary imports from the original file, detecting and importing types from parent modules, adjusting relative import paths (super::, self::) to absolute paths (crate::), and automatically registering the new module in the parent with 'pub mod' and 'pub use' statements. The tool works best with complete functions, structs, enums, traits, or impl blocks. It will NOT work with partial code snippets or incomplete syntax. File paths must be absolute paths. Line numbers are 1-based and inclusive.",
+        "icon": "$(symbol-namespace)",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "extract_rust_module",
+        "userDescription": "Extract Rust code to a new module with smart imports and module registration",
+        "tags": [
+          "rust",
+          "refactor",
+          "module",
+          "extract",
+          "code-organization"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sourceFilePath": {
+              "type": "string",
+              "description": "The absolute file path of the Rust source file containing the code to extract. Must be a .rs file."
+            },
+            "startLine": {
+              "type": "number",
+              "description": "The starting line number of the code to extract (1-based, inclusive). Should point to the beginning of a complete Rust item (function, struct, impl block, etc.)."
+            },
+            "endLine": {
+              "type": "number",
+              "description": "The ending line number of the code to extract (1-based, inclusive). Should point to the end of a complete Rust item."
+            },
+            "moduleName": {
+              "type": "string",
+              "description": "The name of the module to create. Must be in snake_case format (lowercase with underscores), following Rust naming conventions. Examples: 'email_repository', 'user_service', 'pricing_utils'."
+            },
+            "modulePath": {
+              "type": "string",
+              "description": "Optional: The relative path where the module file should be created (e.g., 'src/models/email_repository.rs' or 'src/services/user_service.rs'). If not provided, will use the default path from settings (typically 'src/{moduleName}.rs'). For RustyRoad projects, conventional paths include: controllers/, models/, services/, middleware/, helpers/, utils/."
+            }
+          },
+          "required": ["sourceFilePath", "startLine", "endLine", "moduleName"]
+        }
+      },
+      {
+        "name": "rustyRefactor_analyze_rust_code",
+        "displayName": "Analyze Rust Code",
+        "modelDescription": "Analyzes a selection of Rust code and provides detailed information about its structure, dependencies, and components. This tool should be used when you need to understand what a piece of Rust code contains before refactoring or when gathering information for code review. It detects and reports: all functions with their visibility and generic parameters, all structs with field counts and visibility, all enums with variant counts, all traits, implementation blocks (impl) including trait implementations, whether the code is inside an impl block, all used types and traits, all imports (use statements), overall visibility level, and presence of generic parameters. The tool is useful for determining if code is suitable for extraction to a module and understanding its dependencies. File paths must be absolute paths. Line numbers are 1-based and inclusive.",
+        "icon": "$(search)",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "analyze_rust",
+        "userDescription": "Analyze Rust code structure, dependencies, and components",
+        "tags": [
+          "rust",
+          "analyze",
+          "inspection",
+          "code-structure"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "The absolute file path of the Rust source file to analyze. Must be a .rs file."
+            },
+            "startLine": {
+              "type": "number",
+              "description": "The starting line number to analyze (1-based, inclusive)."
+            },
+            "endLine": {
+              "type": "number",
+              "description": "The ending line number to analyze (1-based, inclusive)."
+            }
+          },
+          "required": ["filePath", "startLine", "endLine"]
+        }
+      }
+    ],
     "menus": {
       "editor/context": [
         {

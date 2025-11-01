@@ -4,6 +4,14 @@ A powerful VSCode extension for extracting Rust code into modules with intellige
 
 ## ✨ Features
 
+### 💬 Copilot Chat Integration (NEW!)
+- **Language Model Tools**: Use Rusty Refactor directly in Copilot Chat with natural language commands
+  - `#extract_rust_module`: Ask Copilot to extract Rust code to a new module
+  - `#analyze_rust`: Ask Copilot to analyze Rust code structure and dependencies
+- **Agent Mode Support**: Copilot can automatically invoke extraction tools as part of its refactoring workflow
+- **Intelligent Tool Calling**: Natural conversation flow - Copilot understands context and suggests refactoring
+- **Confirmation Dialogs**: User-friendly confirmations before any refactoring operations
+
 ### 🤖 AI-Powered Documentation
 - **Automatic Documentation Generation**: Uses GPT-4o-mini to generate comprehensive Rust documentation
 - **Smart Summaries**: AI-generated extraction summaries in the original file
@@ -37,6 +45,32 @@ Built specifically for [RustyRoad](https://github.com/RustyRoad/RustyRoad) proje
 3. **Custom Path Extract**
    - Type exact file path manually
    - For advanced users
+
+## 💬 Using with Copilot Chat
+
+Rusty Refactor is now available as a **Language Model Tool** in Copilot Chat! You can use natural language to refactor your Rust code.
+
+### Extract Code via Copilot Chat
+
+Open the Copilot Chat panel and ask Copilot to help with refactoring:
+
+```
+@copilot #extract_rust_module Extract the create method from src/models/email.rs (lines 15-35) to a module named "email_repository" in src/models/repositories/
+```
+
+Or use the analyze tool first:
+
+```
+@copilot #analyze_rust Analyze the code in src/models/email.rs from lines 1 to 50 to understand what I'm working with
+```
+
+### Why Use Copilot Chat?
+
+- **Natural Language**: Describe what you want to extract in plain English
+- **Context-Aware**: Copilot understands your code and makes intelligent suggestions
+- **Automated**: Let Copilot handle the extraction while you focus on design
+- **Confirmation**: Always review and confirm before changes are applied
+- **Integrated**: Works alongside Copilot's code analysis and suggestions
 
 ## 📖 Usage Examples
 

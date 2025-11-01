@@ -2,6 +2,18 @@
 
 All notable changes to the "Rusty Refactor" extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Copilot Chat Integration (Language Model Tools)**
+  - Two new language model tools for VS Code's Copilot Chat:
+    - `#extract_rust_module`: Extract selected Rust code to a new module with intelligent import handling and module registration
+    - `#analyze_rust`: Analyze Rust code structure and dependencies to understand components before refactoring
+  - Tools are automatically available in Copilot Chat agent mode for Rust projects
+  - Copilot Chat can now programmatically use Rusty Refactor's capabilities to assist with code refactoring
+  - Full support for tool calling and user confirmation dialogs
+  - Comprehensive error handling with helpful suggestions for failed operations
+
 ## [0.2.3] - 2025-10-30
 
 ### Fixed
