@@ -326,9 +326,10 @@ export class AnalyzeRustCodeTool implements vscode.LanguageModelTool<IAnalyzeRus
             if (analysisResult.implementations.length > 0) {
                 report += `**Implementations (${analysisResult.implementations.length}):**\n`;
                 analysisResult.implementations.forEach(impl => {
-                    report += `- impl ${impl.targetType}`;
                     if (impl.traitName) {
-                        report += ` for ${impl.traitName}`;
+                        report += `- impl ${impl.traitName} for ${impl.targetType}`;
+                    } else {
+                        report += `- impl ${impl.targetType}`;
                     }
                     report += ` - ${impl.methods.length} method(s)`;
                     report += '\n';
