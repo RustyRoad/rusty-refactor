@@ -5,6 +5,7 @@ import { ModuleExtractor } from './extractor';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { FileSearchProvider } from './fileSearchProvider';
 import { ModuleExtractorPanel } from './webview/ModuleExtractorPanel';
+import { registerLanguageModelTools } from './languageModelTools';
 import { 
     enhancedCargoCheck, 
     suggestImportsForTypes, 
@@ -22,6 +23,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize rust-analyzer integration
     rustAnalyzerIntegration = new RustAnalyzerIntegration();
+
+    // Register language model tools for Copilot Chat integration
+    registerLanguageModelTools(context, rustAnalyzerIntegration);
 
     // Register command: Extract to Module (default path)
     const extractCommand = vscode.commands.registerCommand(
