@@ -38,11 +38,11 @@ export class AIDocGenerator {
             const messages = [
                 vscode.LanguageModelChatMessage.User(
                     `You are an expert in Rust and its documentation conventions (rustdoc).
-                    Your task is to generate idiomatic and comprehensive documentation comments for the provided Rust code module.
+                    Your task is to ENHANCE the existing documentation comments in the provided Rust code module.
 
                     **Rules:**
-                    1.  Start with a module-level doc comment (//!) that provides a concise summary of the module's purpose.
-                    2.  Add doc comments (///) for all public items: functions, structs, enums, traits, and impl blocks.
+                    1.  If there's already a basic module-level doc comment (//!), IMPROVE it with more detail while keeping the same structure.
+                    2.  Add doc comments (///) for all public items (functions, structs, enums, traits, impl blocks) that don't already have them.
                     3.  For functions, include descriptions of parameters using the format: \`param_name\` - description.
                     4.  Include a clear description of the return value.
                     5.  When a function can panic, include a '# Panics' section detailing the conditions that cause a panic.
@@ -51,12 +51,13 @@ export class AIDocGenerator {
                     8.  Provide meaningful code examples in \`\`\`rust code blocks where appropriate to illustrate usage.
                     9.  Keep descriptions informative yet concise.
                     10. Adhere strictly to rustdoc conventions.
-                    11. **Crucially, do not modify the actual Rust code.** Only add documentation comments.
-                    12. Return the complete, original code with the added documentation comments.
-                    13. Maintain the original code's structure and formatting exactly.`
+                    11. **Crucially, do not modify the actual Rust code.** Only add or enhance documentation comments.
+                    12. Return the complete code with enhanced documentation.
+                    13. Maintain the original code's structure and formatting exactly.
+                    14. **Do NOT wrap your output in markdown code blocks (\`\`\`rust).** Return raw Rust code only.`
                 ),
                 vscode.LanguageModelChatMessage.User(
-                    `Module name: ${moduleName}\n\nAdd comprehensive documentation to this Rust code:\n\n${code}`
+                    `Module name: ${moduleName}\n\nEnhance the documentation in this Rust code:\n\n${code}`
                 )
             ];
 
@@ -191,7 +192,7 @@ export class AIDocGenerator {
                 summary = `// Extracted: ${summary.replace(/^(Extracted:\s*)?/, '')}`;
             }
 
-            return `${summary}\n// Module: ${modulePath}\n// Use: ${moduleName}::*`;
+            return `${summary}\n// Module: ${modulePath}\n// Use: ${moduleName}::*\n`;
 
         } catch (err) {
             console.error('Error generating extraction summary:', err);

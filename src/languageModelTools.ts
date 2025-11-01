@@ -139,7 +139,12 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
 
             const config = vscode.workspace.getConfiguration('rustyRefactor');
             const defaultPath = config.get<string>('defaultModulePath', 'src');
-            const modulePath = params.modulePath || `${defaultPath}/${params.moduleName}.rs`;
+            let modulePath = params.modulePath || `${defaultPath}/${params.moduleName}.rs`;
+            
+            // Ensure the module path ends with .rs
+            if (!modulePath.endsWith('.rs')) {
+                modulePath = `${modulePath}.rs`;
+            }
 
             // Extract the module
             const extractor = new ModuleExtractor(
