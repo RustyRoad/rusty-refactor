@@ -46,7 +46,7 @@ Built specifically for [RustyRoad](https://github.com/RustyRoad/RustyRoad) proje
    - Type exact file path manually
    - For advanced users
 
-## � Using with Copilot Chat
+## 💬 Using with Copilot Chat
 
 Rusty Refactor is now available as a **Language Model Tool** in Copilot Chat! You can use natural language to refactor your Rust code.
 
