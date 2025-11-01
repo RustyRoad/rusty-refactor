@@ -148,7 +148,6 @@
         }
         
         console.log('Rendering file tree with data:', data);
-        treeContent.innerHTML = ''; // Clear previous content
         
         // Add parent directory option if not at root
         if (data.currentPath !== 'src') {
