@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -85,7 +85,12 @@
               "description": "Optional: The relative path where the module file should be created (e.g., 'src/models/email_repository.rs' or 'src/services/user_service.rs'). If not provided, will use the default path from settings (typically 'src/{moduleName}.rs'). For RustyRoad projects, conventional paths include: controllers/, models/, services/, middleware/, helpers/, utils/."
             }
           },
-          "required": ["sourceFilePath", "startLine", "endLine", "moduleName"]
+          "required": [
+            "sourceFilePath",
+            "startLine",
+            "endLine",
+            "moduleName"
+          ]
         }
       },
       {
@@ -118,7 +123,11 @@
               "description": "The ending line number to analyze (1-based, inclusive)."
             }
           },
-          "required": ["filePath", "startLine", "endLine"]
+          "required": [
+            "filePath",
+            "startLine",
+            "endLine"
+          ]
         }
       }
     ],
