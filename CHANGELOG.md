@@ -4,6 +4,30 @@ All notable changes to the "Rusty Refactor" extension will be documented in this
 
 ## [Unreleased]
 
+## [0.4.3] - 2025-11-01
+
+### Added
+- **AI Documentation Validation Pipeline**: Multi-layered validation system to ensure AI-generated documentation is correct
+  - **LLM-as-a-Judge**: Uses the language model to validate its own output before applying changes
+  - **Rust-Analyzer Integration**: Creates temporary files and validates with rust-analyzer for compilation errors
+  - **Symbol Verification**: Uses VS Code symbol provider API to ensure all functions, structs, and traits are detected
+  - **Smart Retry Logic**: Automatically retries with corrective prompts when validation fails
+  - **Comprehensive Logging**: Detailed output channel logging for debugging validation issues
+
+### Improved
+- AI documentation now validates that code structure is preserved exactly
+- Prevents commented-out code from being written to module files
+- Catches invalid doc comment placement before files are created
+- Better error messages explaining why AI documentation was rejected
+- Validation checks for 8+ criteria including balanced braces, complete symbols, and proper comment syntax
+
+### Fixed
+- Fixed issue where AI would comment out actual code instead of adding documentation
+- Fixed problem with malformed `#[doc = "..."]` attributes appearing in generated code
+- Fixed incomplete code being written to module files
+- Fixed missing function bodies or struct definitions after AI documentation
+- Module browser webview now properly loads and displays directory tree
+
 ### Added
 - **Copilot Chat Integration (Language Model Tools)**
   - Two new language model tools for VS Code's Copilot Chat:
