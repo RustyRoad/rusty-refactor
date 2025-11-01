@@ -12,10 +12,14 @@ A powerful VSCode extension for extracting Rust code into modules with intellige
 - **Intelligent Tool Calling**: Natural conversation flow - Copilot understands context and suggests refactoring
 - **Confirmation Dialogs**: User-friendly confirmations before any refactoring operations
 
-### 🤖 AI-Powered Documentation
+### 🤖 AI-Powered Documentation with Multi-Layer Validation
 - **Automatic Documentation Generation**: Uses GPT-4o-mini to generate comprehensive Rust documentation
+- **LLM-as-a-Judge Validation**: AI validates its own output to catch errors before applying changes
+- **Rust-Analyzer Integration**: Validates generated code compiles and symbols are properly detected
+- **Smart Retry Logic**: Automatically retries with corrective feedback when validation fails
 - **Smart Summaries**: AI-generated extraction summaries in the original file
 - **Copilot Integration**: Leverages GitHub Copilot's language models
+- **Comprehensive Output Logging**: View validation steps in the "Rusty Refactor" output panel
 - **Configurable**: Can be set to always ask, always generate, or never generate
 
 ### 🚀 Smart Code Extraction
@@ -284,6 +288,35 @@ The extension automatically:
 2. **Enable in Settings**: Set `rustyRefactor.aiAutoDocumentation` to `true` for automatic generation
 3. **Or Choose Each Time**: Keep `rustyRefactor.aiAskEachTime` as `true` to be prompted each extraction
 
+### AI Validation Pipeline
+
+The extension uses a multi-layered validation system to ensure AI-generated documentation is correct:
+
+**1. LLM Judge** - AI reviews its own output for 8+ criteria:
+- Code preservation (no modifications to original code)
+- Valid doc comment syntax (`///` and `//!`)
+- No inline documentation
+- No commented-out code
+- Complete code presence
+- Balanced braces
+- No `#[doc]` attributes
+- Proper structure
+
+**2. Rust-Analyzer Validation** - Creates temporary file and checks:
+- Compilation errors via VS Code diagnostics
+- Symbol detection via symbol provider API
+- All original symbols (functions, structs, etc.) are present
+
+**3. Smart Retry** - If validation fails:
+- Retries once with corrective feedback
+- Uses specific error messages to guide retry
+- Falls back to original code if retry also fails
+
+**4. Output Logging** - View detailed validation in Output panel:
+- Open View → Output
+- Select "Rusty Refactor" from dropdown
+- See validation steps, errors, and retry attempts
+
 **AI Documentation Example:**
 
 Before extraction, your code might look like this:
@@ -370,6 +403,12 @@ src/
 When you use "Extract with File Browser", these directories are suggested automatically!
 
 ## 🐛 Troubleshooting
+
+### AI Documentation Issues
+- **No documentation generated**: Check the "Rusty Refactor" output panel for validation errors
+- **Code appears broken**: The validation pipeline should prevent this - report as a bug with console output
+- **Validation keeps failing**: Try with simpler code first, or disable AI documentation temporarily
+- **See validation logs**: View → Output → Select "Rusty Refactor" from dropdown
 
 ### Imports not working?
 - The extension copies all imports from your original file
