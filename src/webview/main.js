@@ -9,16 +9,26 @@
     
     // Initialize
     document.addEventListener('DOMContentLoaded', () => {
+        console.log('DOM content loaded, initializing webview');
+        
         // Setup event listeners
         document.getElementById('create-btn').addEventListener('click', handleConfirm);
         document.getElementById('cancel-btn').addEventListener('click', handleCancel);
         
-        // Add a small delay before notifying extension that webview is ready
-        // This ensures all DOM elements are properly loaded
-        setTimeout(() => {
-            console.log('Webview fully loaded, sending ready command');
-            vscode.postMessage({ command: 'ready' });
-        }, 100);
+        // Check if essential elements exist
+        const fileTreeContent = document.getElementById('file-tree-content');
+        if (!fileTreeContent) {
+            console.error('file-tree-content element missing from DOM');
+        } else {
+            console.log('file-tree-content element found');
+            
+            // Add a small delay before notifying extension that webview is ready
+            // This ensures all DOM elements are properly loaded
+            setTimeout(() => {
+                console.log('Webview fully loaded, sending ready command');
+                vscode.postMessage({ command: 'ready' });
+            }, 100);
+        }
     });
     
     // Handle messages from extension
@@ -115,6 +125,21 @@
         console.log('Updating file tree with data:', data);
         treeContent.innerHTML = '';
         
+        // Show loading indicator
+        treeContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+        
+        // Small delay to ensure loading indicator shows
+        setTimeout(() => {
+            renderFileTree(data);
+        }, 10);
+    }
+    
+    function renderFileTree(data) {
+        const treeContent = document.getElementById('file-tree-content');
+        if (!treeContent) return;
+        
+        console.log('Rendering file tree with data:', data);
+        
         // Add parent directory option if not at root
         if (data.currentPath !== 'src') {
             const parentItem = createTreeItem({
@@ -184,6 +209,9 @@
             emptyState.textContent = 'No directories found. You can create a new directory or select a different location.';
             treeContent.appendChild(emptyState);
         }
+        
+        // Log final DOM state for debugging
+        console.log('Final file tree DOM state:', treeContent.innerHTML);
     }
     
     function createTreeItem(item) {

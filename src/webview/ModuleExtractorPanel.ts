@@ -108,6 +108,7 @@ export class ModuleExtractorPanel {
         // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
             async (message) => {
+                console.log('Received message from webview:', message);
                 switch (message.command) {
                     case 'selectDirectory':
                         this._selectDirectory(message.path);
@@ -119,7 +120,8 @@ export class ModuleExtractorPanel {
                         this._cancel();
                         break;
                     case 'ready':
-                        this._loadInitialData();
+                        console.log('Webview is ready, loading initial data');
+                        await this._loadInitialData();
                         break;
                 }
             },
@@ -144,14 +146,17 @@ export class ModuleExtractorPanel {
     }
 
     private async _loadInitialData() {
-        // Update the current path display
+        console.log('Loading initial data for path:', this._currentPath);
+        
+        // Update current path display
         this._panel?.webview.postMessage({
             command: 'updateCurrentPath',
             currentPath: this._currentPath
         });
         
         // Load directory items
-        this._loadDirectoryItems(this._currentPath);
+        await this._loadDirectoryItems(this._currentPath);
+        console.log('Initial data loaded successfully');
     }
     
     private async _selectDirectory(dirPath: string) {
@@ -176,6 +181,8 @@ export class ModuleExtractorPanel {
         this._panel?.dispose();
     }
     private async _loadDirectoryItems(currentPath: string): Promise<void> {
+        console.log(`Loading directory items for: ${currentPath}`);
+        
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const rustyRoadMode = config.get<boolean>('rustyRoadMode', true);
 
@@ -189,10 +196,12 @@ export class ModuleExtractorPanel {
 
         try {
             entries = await vscode.workspace.fs.readDirectory(directoryUri);
+            console.log(`Successfully read ${entries.length} entries from ${currentPath}`);
         } catch (error) {
             directoryExists = false;
+            console.error(`Error reading directory ${currentPath}:`, error);
             if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) {
-                console.warn(`Error reading directory ${currentPath}:`, error);
+                vscode.window.showErrorMessage(`Failed to read directory: ${currentPath}`);
             }
         }
 
@@ -276,6 +285,7 @@ export class ModuleExtractorPanel {
             breadcrumb: this._generateBreadcrumb(currentPath)
         };
 
+        console.log('Sending updateDirectory message with data:', updateMessage);
         this._panel?.webview.postMessage(updateMessage);
     }
 
