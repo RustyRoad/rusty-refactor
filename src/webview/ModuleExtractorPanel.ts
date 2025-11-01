@@ -23,6 +23,13 @@ export class ModuleExtractorPanel {
     private static instance?: ModuleExtractorPanel;
     private static outputChannel?: vscode.OutputChannel;
     
+    /**
+     * Sets the output channel for logging messages from ModuleExtractorPanel.
+     * 
+     * This must be called during extension activation to enable output channel logging.
+     * 
+     * @param channel The VS Code OutputChannel to use for logging.
+     */
     public static setOutputChannel(channel: vscode.OutputChannel) {
         ModuleExtractorPanel.outputChannel = channel;
     }
