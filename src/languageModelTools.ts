@@ -129,6 +129,9 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
 
             // Analyze the selected code
             const analyzer = new RustCodeAnalyzer(document, this.rustAnalyzer);
+            
+            // use the symbol api to get the whole symbol information
+            
             const analysisResult = await analyzer.analyzeSelection(selection, selectedText);
 
             // Determine module path
