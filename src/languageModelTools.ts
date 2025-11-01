@@ -153,7 +153,6 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             await extractor.extract();
 
             // Build success message
-            const fullModulePath = path.join(workspaceFolder.uri.fsPath, modulePath);
             const publicItems = [
                 ...analysisResult.functions.filter(f => f.isPublic).map(f => f.name),
                 ...analysisResult.structs.filter(s => s.isPublic).map(s => s.name),
