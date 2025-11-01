@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -123,7 +123,7 @@
     "build": "npm run build:rust && npm run compile",
     "package-publish": "npm run build && npm run package"
   },
-  "devDependencies": {  
+  "devDependencies": {
     "@types/node": "24.9.2",
     "@types/vscode": "1.105.0",
     "@vscode/vsce": "3.6.2",
