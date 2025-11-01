@@ -321,8 +321,45 @@ runs:
         git push origin "v$version"
         Write-Host "✓ Tag pushed"
         
+    - name: Delete Existing Release (if immutable)
+      if: inputs.create-github-release == 'true' && steps.version-check.outputs.exists == 'true' && inputs.skip-version-check != 'true'
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $version = "${{ steps.version.outputs.version }}"
+        $tag = "v$version"
+        
+        # Check if release exists and is immutable
+        try {
+          $release = curl -s -H "Authorization: token $env:GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" | \
+            ConvertFrom-Json
+          
+          if ($release) {
+            Write-Host "📋 Found existing release for $tag"
+            
+            # Try to delete the release first
+            try {
+              $deleteResult = curl -s -X DELETE \
+                -H "Authorization: token $env:GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$($release.id)"
+              
+              if ($deleteResult) {
+                Write-Host "✅ Deleted existing release for $tag"
+              } else {
+                Write-Host "ℹ️  Release couldn't be deleted, will try to update instead"
+              }
+            } catch {
+              Write-Host "⚠️  Failed to delete existing release: $_"
+            }
+          }
+        } catch {
+          Write-Host "ℹ️  Checking for existing release failed, proceeding with creation"
+        }
+        
     - name: Create GitHub Release
-      if: inputs.create-github-release == 'true' && steps.version-check.outputs.exists != 'true'
+      if: inputs.create-github-release == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ steps.version.outputs.version }}
@@ -331,6 +368,7 @@ runs:
         prerelease: ${{ inputs.prerelease }}
         generate_release_notes: true
         files: '*.vsix'
+        remove_latest: false  # Don't mark as latest to avoid immutable tag conflicts
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         
