@@ -5,16 +5,15 @@ import * as fs from 'fs';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 
 /**
- * Provides AI-powered documentation and summary generation for Rust code
- * using the VS Code Language Model API.
+ * Provides AI-powered documentation generation for Rust code
+ * using the built-in VS Code Language Model API (same as VS Code's "Generate Documentation").
  */
 export class AIDocGenerator {
     /**
      * Generates comprehensive Rust documentation for a given code snippet.
      *
-     * This method selects a suitable language model, constructs a detailed prompt
-     * based on rustdoc conventions, sends the request to the model, and
-     * processes the streamed response.
+     * Uses the built-in VS Code LM API (vscode.lm) to generate documentation,
+     * mirroring the behavior of VS Code's native "Generate Documentation" command.
      *
      * @param code The Rust code to be documented.
      * @param moduleName The name of the module containing the code.
@@ -22,10 +21,10 @@ export class AIDocGenerator {
      */
     async generateDocumentation(code: string, moduleName: string): Promise<string | null> {
         try {
-            // Select a fast and cost-effective model for documentation generation.
+            // Check if language model access is available (mirrors built-in guard)
             const models = await vscode.lm.selectChatModels({
                 vendor: 'copilot',
-                family: 'gpt-5-mini'
+                family: 'gpt-4o'
             });
 
             if (models.length === 0) {
@@ -35,7 +34,7 @@ export class AIDocGenerator {
 
             const model = models[0];
 
-            // Construct a detailed prompt for generating high-quality Rust documentation.
+            // Construct prompt using built-in LM API message helpers
             const messages = [
                 vscode.LanguageModelChatMessage.User(
                     `You are an expert in Rust and its documentation conventions (rustdoc).
@@ -61,19 +60,25 @@ export class AIDocGenerator {
                 )
             ];
 
-            // Send the request to the language model and handle the streaming response.
+            // Use built-in LM chat request options (mirrors VS Code's native flow)
+            const requestOptions: vscode.LanguageModelChatRequestOptions = {
+                justification: 'Generating Rust documentation for extracted module'
+            };
+
+            // Send streaming request using built-in LM API
             const response = await model.sendRequest(
                 messages,
-                {},
+                requestOptions,
                 new vscode.CancellationTokenSource().token
             );
 
+            // Process streaming response (standard LM API pattern)
             let documentedCode = '';
             for await (const fragment of response.text) {
                 documentedCode += fragment;
             }
 
-            // Clean up any markdown formatting from the response.
+            // Clean up any markdown formatting from the response
             const cleaned = this.cleanMarkdownCodeBlocks(documentedCode);
             
             // First: Use LLM as a judge to validate the documentation
@@ -90,13 +95,13 @@ export class AIDocGenerator {
                 return null;
             }
             
-            // Second: Validate the generated code with rust-analyzer and VS Code diagnostics
-            const validationResult = await this.validateWithRustAnalyzer(cleaned, code, moduleName);
+            // Second: Validate using built-in VS Code diagnostics (mirrors built-in validation)
+            const validationResult = await this.validateWithDiagnostics(cleaned, code, moduleName);
             
             if (!validationResult.isValid) {
-                console.warn('AI generated code failed rust-analyzer validation:', validationResult.errors);
+                console.warn('Generated code failed validation:', validationResult.errors);
                 
-                // Retry once with a corrective prompt if first attempt failed
+                // Retry once with corrective prompt if validation failed
                 if (validationResult.canRetry) {
                     console.log('Retrying documentation generation with corrective prompt...');
                     return await this.retryDocumentationGeneration(code, moduleName, model, validationResult.errors);
@@ -135,18 +140,11 @@ export class AIDocGenerator {
         const defaultSummary = `// Code extracted to ${modulePath}\n// Available as: ${moduleName}::*`;
 
         try {
-            // Attempt to use a custom or specified language model for summarization.
-            let models = await vscode.lm.selectChatModels({
-                vendor: 'CustomOAI',
-                family: 'GLM-4.6 (Z.AI Coding)'
-            })
-
-            if (models.length === 0) {
-                models = await vscode.lm.selectChatModels({
-                    vendor: 'copilot',
-                    family: 'gpt-5-mini'
-                })
-            }
+            // Use built-in LM API to select available chat models
+            const models = await vscode.lm.selectChatModels({
+                vendor: 'copilot',
+                family: 'gpt-4o'
+            });
 
             if (models.length === 0) {
                 console.warn('No language models available for extraction summary. Using default summary.');
@@ -155,6 +153,7 @@ export class AIDocGenerator {
 
             const model = models[0];
 
+            // Construct summary request using built-in message helpers
             const messages = [
                 vscode.LanguageModelChatMessage.User(
                     `You are a Rust code summarizer. Your task is to create a brief, single-line comment (max 80 characters)
@@ -171,9 +170,13 @@ export class AIDocGenerator {
                 )
             ];
 
+            const requestOptions: vscode.LanguageModelChatRequestOptions = {
+                justification: 'Generating summary for extracted Rust module'
+            };
+
             const response = await model.sendRequest(
                 messages,
-                {},
+                requestOptions,
                 new vscode.CancellationTokenSource().token
             );
 
@@ -246,7 +249,8 @@ export class AIDocGenerator {
 
     /**
      * Uses an LLM as a judge to validate that documentation was added correctly
-     * without modifying the original code structure
+     * without modifying the original code structure.
+     * Uses the same built-in LM API for validation.
      */
     private async validateWithLLMJudge(
         documentedCode: string,
@@ -292,9 +296,13 @@ ${documentedCode}
                 )
             ];
             
+            const requestOptions: vscode.LanguageModelChatRequestOptions = {
+                justification: 'Validating generated Rust documentation'
+            };
+            
             const response = await model.sendRequest(
                 judgeMessages,
-                {},
+                requestOptions,
                 new vscode.CancellationTokenSource().token
             );
             
@@ -333,10 +341,11 @@ ${documentedCode}
     }
 
     /**
-     * Validates generated code using rust-analyzer and VS Code diagnostics
-     * Creates a temporary file, checks for errors, and verifies symbols are detected
+     * Validates generated code using VS Code's built-in diagnostics.
+     * Creates a temporary file, checks for errors, and verifies symbols are detected.
+     * This mirrors how the built-in "Generate Documentation" validates output.
      */
-    private async validateWithRustAnalyzer(
+    private async validateWithDiagnostics(
         documentedCode: string,
         originalCode: string,
         moduleName: string
@@ -372,10 +381,10 @@ ${documentedCode}
             // Open the document in VS Code (but don't show it)
             const document = await vscode.workspace.openTextDocument(tempFileUri);
             
-            // Wait a bit for rust-analyzer to process the file
+            // Wait for rust-analyzer to process the file
             await new Promise(resolve => setTimeout(resolve, 1000));
             
-            // Get diagnostics from VS Code
+            // Get diagnostics using built-in VS Code API
             const diagnostics = vscode.languages.getDiagnostics(tempFileUri);
             const errorDiagnostics = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
             
@@ -399,7 +408,7 @@ ${documentedCode}
                 return { isValid: false, errors, canRetry: isDocError };
             }
             
-            // Check if symbols are properly detected using VS Code's symbol provider
+            // Check if symbols are properly detected using built-in VS Code symbol provider
             const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
                 'vscode.executeDocumentSymbolProvider',
                 tempFileUri
@@ -454,7 +463,8 @@ ${documentedCode}
     }
 
     /**
-     * Retry documentation generation with a corrective prompt
+     * Retry documentation generation with a corrective prompt.
+     * Uses the same built-in LM API patterns as the initial generation.
      */
     private async retryDocumentationGeneration(
         code: string,
@@ -486,9 +496,13 @@ ${documentedCode}
                 )
             ];
             
+            const requestOptions: vscode.LanguageModelChatRequestOptions = {
+                justification: 'Retrying Rust documentation generation with corrections'
+            };
+            
             const response = await model.sendRequest(
                 messages,
-                {},
+                requestOptions,
                 new vscode.CancellationTokenSource().token
             );
             
@@ -500,7 +514,7 @@ ${documentedCode}
             const cleaned = this.cleanMarkdownCodeBlocks(documentedCode);
             
             // Validate again (don't retry a second time)
-            const validationResult = await this.validateWithRustAnalyzer(cleaned, code, moduleName);
+            const validationResult = await this.validateWithDiagnostics(cleaned, code, moduleName);
             
             if (!validationResult.isValid) {
                 console.warn('Retry failed validation, using original code');
