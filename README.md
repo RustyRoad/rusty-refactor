@@ -72,7 +72,7 @@ Or use the analyze tool first:
 - **Confirmation**: Always review and confirm before changes are applied
 - **Integrated**: Works alongside Copilot's code analysis and suggestions
 
-## �📖 Usage Examples
+## 📖 Usage Examples
 
 ### Example 1: Extracting Methods from an `impl` Block
 
