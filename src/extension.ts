@@ -149,7 +149,8 @@ async function handleExtractToModuleWithSearch(extensionUri: vscode.Uri) {
             analysisResult,
             moduleName,
             selectedPath,
-            rustAnalyzerIntegration
+            rustAnalyzerIntegration,
+            selection // Pass original selection for accurate replacement
         );
         
         outputChannel.appendLine('Extracting module...');
@@ -239,7 +240,8 @@ async function handleExtractToModule(useCustomPath: boolean) {
             analysisResult,
             moduleName,
             modulePath,
-            rustAnalyzerIntegration
+            rustAnalyzerIntegration,
+            selection // Pass original selection for accurate replacement
         );
         
         await extractor.extract();

@@ -155,7 +155,8 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
                 analysisResult,
                 params.moduleName,
                 modulePath,
-                this.rustAnalyzer
+                this.rustAnalyzer,
+                selection // Pass original selection for accurate replacement
             );
 
             await extractor.extract();
