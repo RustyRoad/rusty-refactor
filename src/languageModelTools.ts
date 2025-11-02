@@ -15,13 +15,23 @@ export interface IExtractToModuleParameters {
     
     /**
      * The starting line number of the code to extract (1-based)
+     * NOTE: Line numbers may be stale after previous extractions.
+     * Prefer using functionName when possible for more reliable extraction.
      */
     startLine: number;
     
     /**
      * The ending line number of the code to extract (1-based, inclusive)
+     * NOTE: Line numbers may be stale after previous extractions.
      */
     endLine: number;
+    
+    /**
+     * The name of the function/struct/enum to extract (preferred over line numbers)
+     * If provided, will search for this symbol instead of using line numbers.
+     * This is more reliable for sequential extractions.
+     */
+    functionName?: string;
     
     /**
      * The name of the module to create (must be snake_case)
@@ -60,6 +70,148 @@ export interface IAnalyzeRustCodeParameters {
  */
 export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToModuleParameters> {
     constructor(private rustAnalyzer: RustAnalyzerIntegration) {}
+
+    /**
+     * Finds a symbol (function, struct, enum, trait) by name in the document.
+     * Uses VS Code's symbol provider API for accurate, line-number-independent lookup.
+     */
+    private async findSymbolByName(
+        document: vscode.TextDocument,
+        symbolName: string
+    ): Promise<{ selection: vscode.Selection; text: string } | null> {
+        try {
+            // Get all document symbols
+            const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                'vscode.executeDocumentSymbolProvider',
+                document.uri
+            );
+
+            if (!symbols || symbols.length === 0) {
+                return null;
+            }
+
+            // Recursively search for the symbol
+            const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | null => {
+                for (const symbol of syms) {
+                    if (symbol.name === symbolName) {
+                        return symbol;
+                    }
+                    if (symbol.children && symbol.children.length > 0) {
+                        const found = findSymbol(symbol.children);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const symbol = findSymbol(symbols);
+            if (!symbol) {
+                return null;
+            }
+
+            // Expand to include attributes (e.g., #[get("/path")])
+            const startLine = this.findAttributeStart(document, symbol.range.start.line);
+            const selection = new vscode.Selection(
+                new vscode.Position(startLine, 0),
+                symbol.range.end
+            );
+
+            return {
+                selection,
+                text: document.getText(selection)
+            };
+        } catch (err) {
+            console.error('Error finding symbol by name:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Scans upward to find attributes and doc comments attached to a symbol.
+     */
+    private findAttributeStart(document: vscode.TextDocument, symbolStartLine: number): number {
+        let line = symbolStartLine - 1;
+        while (line >= 0) {
+            const text = document.lineAt(line).text.trim();
+            if (text.startsWith('#[') || text.startsWith('///') || text === '') {
+                line--;
+                continue;
+            }
+            break;
+        }
+        return line + 1;
+    }
+
+    /**
+     * Finds a symbol (function, struct, enum, trait) by name in the document.
+     * Uses VS Code's symbol provider API for accurate, line-number-independent lookup.
+     */
+    private async findSymbolByName(
+        document: vscode.TextDocument,
+        symbolName: string
+    ): Promise<{ selection: vscode.Selection; text: string } | null> {
+        try {
+            // Get all document symbols
+            const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                'vscode.executeDocumentSymbolProvider',
+                document.uri
+            );
+
+            if (!symbols || symbols.length === 0) {
+                return null;
+            }
+
+            // Recursively search for the symbol
+            const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | null => {
+                for (const symbol of syms) {
+                    if (symbol.name === symbolName) {
+                        return symbol;
+                    }
+                    if (symbol.children && symbol.children.length > 0) {
+                        const found = findSymbol(symbol.children);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const symbol = findSymbol(symbols);
+            if (!symbol) {
+                return null;
+            }
+
+            // Expand to include attributes (e.g., #[get("/path")])
+            const startLine = this.findAttributeStart(document, symbol.range.start.line);
+            const selection = new vscode.Selection(
+                new vscode.Position(startLine, 0),
+                symbol.range.end
+            );
+
+            return {
+                selection,
+                text: document.getText(selection)
+            };
+        } catch (err) {
+            console.error('Error finding symbol by name:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Scans upward to find attributes and doc comments attached to a symbol.
+     */
+    private findAttributeStart(document: vscode.TextDocument, symbolStartLine: number): number {
+        let line = symbolStartLine - 1;
+        while (line >= 0) {
+            const text = document.lineAt(line).text.trim();
+            if (text.startsWith('#[') || text.startsWith('///') || text === '') {
+                line--;
+                continue;
+            }
+            break;
+        }
+        return line + 1;
+    }
 
     async prepareInvocation(
         options: vscode.LanguageModelToolInvocationPrepareOptions<IExtractToModuleParameters>,
