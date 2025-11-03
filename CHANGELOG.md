@@ -4,7 +4,7 @@ All notable changes to the "Rusty Refactor" extension will be documented in this
 
 ## [Unreleased]
 
-## [0.4.35] - 2025-11-03
+## [0.4.36] - 2025-11-03
 
 ### Added - LLM Integration Revolution 🤖
 
