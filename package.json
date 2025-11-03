@@ -210,7 +210,6 @@
     "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
     "build:ts": "rsbuild build",
     "build": "npm run build:rust && npm run build:ts",
-    "compile": "npm run build",
     "watch": "rsbuild build --watch",
     "watch:ts": "rsbuild build --watch",
     "dev": "rsbuild dev",
