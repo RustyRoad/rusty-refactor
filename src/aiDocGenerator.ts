@@ -3,12 +3,15 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
+import { logToOutput } from './extractor';
 
 /**
  * Provides AI-powered documentation generation for Rust code
  * using the built-in VS Code Language Model API (same as VS Code's "Generate Documentation").
  */
 export class AIDocGenerator {
+    private static hasWarnedAboutMissingLm = false;
+
     /**
      * Generates comprehensive Rust documentation for a given code snippet.
      *
@@ -19,20 +22,23 @@ export class AIDocGenerator {
      * @param moduleName The name of the module containing the code.
      * @returns A promise that resolves to the documented code as a string, or null if an error occurs.
      */
+
     async generateDocumentation(code: string, moduleName: string): Promise<string | null> {
         try {
-            // Check if language model access is available (mirrors built-in guard)
-            const models = await vscode.lm.selectChatModels({
-                vendor: 'copilot',
-                family: 'gpt-4o'
-            });
+            if (!this.isLanguageModelApiAvailable()) {
+                this.warnLanguageModelUnavailable();
+                return null;
+            }
 
-            if (models.length === 0) {
+            // --- Model Selection (Refactored) ---
+            const model = await this.selectDocumentationModel();
+            if (!model) {
                 vscode.window.showWarningMessage('No language models available for documentation generation.');
                 return null;
             }
 
-            const model = models[0];
+            logToOutput('Using language model for documentation generation.');
+            logToOutput(`Selected model: ${model.name} (${model.vendor})`);
 
             // Construct prompt using built-in LM API message helpers
             const messages = [
@@ -71,12 +77,17 @@ export class AIDocGenerator {
                 justification: 'Generating Rust documentation for extracted module'
             };
 
-            // Send streaming request using built-in LM API
+
             const response = await model.sendRequest(
                 messages,
                 requestOptions,
                 new vscode.CancellationTokenSource().token
             );
+
+            logToOutput('Received documentation from language model.');
+            logToOutput('Validating generated documentation...');
+            logToOutput('--- Generated Documentation Start ---');
+            logToOutput('Response streaming in...');
 
             // Process streaming response (standard LM API pattern)
             let documentedCode = '';
@@ -86,14 +97,14 @@ export class AIDocGenerator {
 
             // Clean up any markdown formatting from the response
             const cleaned = this.cleanMarkdownCodeBlocks(documentedCode);
-            
+
             // Quick validation: Check for placeholder comments that indicate code was deleted
-            if (cleaned.includes('remains unchanged') || 
+            if (cleaned.includes('remains unchanged') ||
                 cleaned.includes('implementation remains') ||
                 cleaned.includes('Field definitions remain') ||
                 cleaned.includes('// Function implementation') ||
                 cleaned.includes('// Field definitions')) {
-                console.error('AI generated placeholder comments instead of preserving code - rejecting output');
+                logToOutput('AI generated placeholder comments instead of preserving code - rejecting output');
                 return null; // Return null to use original undocumented code
             }
 
@@ -103,47 +114,48 @@ export class AIDocGenerator {
             const lineRatio = cleanedLines / originalLines;
 
             if (lineRatio < 0.7) {
-                console.error(`AI output is too short (${cleanedLines} vs ${originalLines} non-empty lines) - likely deleted code`);
+                logToOutput(`AI output is too short (${cleanedLines} vs ${originalLines} non-empty lines) - likely deleted code`);
                 return null; // Return null to use original undocumented code
             }
-            
+
+
             // First: Use LLM as a judge to validate the documentation
             const judgeResult = await this.validateWithLLMJudge(cleaned, code, model);
-            
+
             if (!judgeResult.isValid) {
-                console.warn('LLM judge rejected the documentation:', judgeResult.reason);
-                
+                logToOutput(`LLM judge rejected the documentation: ${judgeResult.reason}`);
+
                 if (judgeResult.canRetry) {
-                    console.log('Retrying with LLM feedback...');
+                    logToOutput('Retrying with LLM feedback...');
                     return await this.retryDocumentationGeneration(code, moduleName, model, [judgeResult.reason]);
                 }
-                
+
                 return null;
             }
-            
+
             // Second: Validate using built-in VS Code diagnostics (mirrors built-in validation)
             const validationResult = await this.validateWithDiagnostics(cleaned, code, moduleName);
-            
+
             if (!validationResult.isValid) {
-                console.warn('Generated code failed validation:', validationResult.errors);
-                
+                logToOutput(`Generated code failed validation: ${validationResult.errors}`);
+
                 // Retry once with corrective prompt if validation failed
                 if (validationResult.canRetry) {
-                    console.log('Retrying documentation generation with corrective prompt...');
+                    logToOutput('Retrying documentation generation with corrective prompt...');
                     return await this.retryDocumentationGeneration(code, moduleName, model, validationResult.errors);
                 }
-                
+
                 return null;
             }
-            
+
             return cleaned;
 
         } catch (err) {
-            if (err instanceof vscode.LanguageModelError) {
-                console.error('Language Model Error:', err.message, err.code);
+            if (this.isLanguageModelError(err)) {
+                logToOutput(`Language Model Error: ${err.message} (code: ${err.code})`);
                 this.handleLanguageModelError(err);
             } else {
-                console.error('Error generating documentation:', err);
+                logToOutput(`Error generating documentation: ${err}`);
                 vscode.window.showErrorMessage('An unexpected error occurred while generating documentation.');
             }
             return null;
@@ -158,6 +170,7 @@ export class AIDocGenerator {
      * @param modulePath The path to the new module file.
      * @returns A promise that resolves to a formatted summary comment.
      */
+
     async generateExtractionSummary(
         code: string,
         moduleName: string,
@@ -166,18 +179,12 @@ export class AIDocGenerator {
         const defaultSummary = `// Code extracted to ${modulePath}\n// Available as: ${moduleName}::*`;
 
         try {
-            // Use built-in LM API to select available chat models
-            const models = await vscode.lm.selectChatModels({
-                vendor: 'copilot',
-                family: 'gpt-4o'
-            });
-
-            if (models.length === 0) {
-                console.warn('No language models available for extraction summary. Using default summary.');
+            // --- Model Selection (Refactored) ---
+            const model = await this.selectDocumentationModel();
+            if (!model) {
+                logToOutput('No language models available for extraction summary. Using default summary.');
                 return defaultSummary;
             }
-
-            const model = models[0];
 
             // Construct summary request using built-in message helpers
             const messages = [
@@ -220,7 +227,7 @@ export class AIDocGenerator {
             return `${summary}\n// Module: ${modulePath}\n// Use: ${moduleName}::*\n`;
 
         } catch (err) {
-            console.error('Error generating extraction summary:', err);
+            logToOutput(`Error generating extraction summary: ${err}`);
             return defaultSummary;
         }
     }
@@ -234,6 +241,11 @@ export class AIDocGenerator {
      * @returns A promise that resolves to true if documentation should be generated, otherwise false.
      */
     async shouldGenerateDocumentation(): Promise<boolean> {
+        if (!this.isLanguageModelApiAvailable()) {
+            this.warnLanguageModelUnavailable();
+            return false;
+        }
+
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const autoDoc = config.get<boolean>('aiAutoDocumentation', false);
 
@@ -271,6 +283,21 @@ export class AIDocGenerator {
         let cleaned = code.replace(/```rust\n?/g, '');
         cleaned = cleaned.replace(/```\n?/g, '');
         return cleaned.trim();
+    }
+
+    private isLanguageModelApiAvailable(): boolean {
+        const lmNamespace = (vscode as unknown as { lm?: { selectChatModels?: unknown } }).lm;
+        return !!lmNamespace && typeof lmNamespace.selectChatModels === 'function';
+    }
+
+    private warnLanguageModelUnavailable(): void {
+        logToOutput('Language Model API not available; skipping AI documentation generation.');
+        if (!AIDocGenerator.hasWarnedAboutMissingLm) {
+            vscode.window.showWarningMessage(
+                'AI documentation requires a VS Code build with language model access (GitHub Copilot). Skipping documentation generation.'
+            );
+            AIDocGenerator.hasWarnedAboutMissingLm = true;
+        }
     }
 
     /**
@@ -324,47 +351,47 @@ ${documentedCode}
 \`\`\``
                 )
             ];
-            
+
             const requestOptions: vscode.LanguageModelChatRequestOptions = {
                 justification: 'Validating generated Rust documentation'
             };
-            
+
             const response = await model.sendRequest(
                 judgeMessages,
                 requestOptions,
                 new vscode.CancellationTokenSource().token
             );
-            
+
             let judgment = '';
             for await (const fragment of response.text) {
                 judgment += fragment;
             }
-            
+
             // Parse the JSON response
             const jsonMatch = judgment.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
-                console.warn('LLM judge returned non-JSON response:', judgment);
-                // If we can't parse, assume valid (fail open)
-                return { isValid: true, reason: '', canRetry: false };
+                logToOutput(`LLM judge returned non-JSON response: ${judgment}`);
+                // Fix: If JSON is malformed, assume failure and allow retry instead of success.
+                return { isValid: false, reason: 'LLM judge failed to return valid JSON', canRetry: true };
             }
-            
+
             try {
                 const result = JSON.parse(jsonMatch[0]);
-                
+
                 return {
                     isValid: result.valid === true,
                     reason: result.reason || 'LLM judge rejected the code',
                     canRetry: result.canRetry === true
                 };
             } catch (parseErr) {
-                console.error('Failed to parse LLM judge response:', parseErr);
-                // Fail open if we can't parse
-                return { isValid: true, reason: '', canRetry: false };
+                logToOutput(`Failed to parse LLM judge response JSON: ${parseErr}`);
+                // Fix: If JSON parsing fails, assume failure and allow retry instead of success.
+                return { isValid: false, reason: 'Failed to parse LLM judge JSON response', canRetry: true };
             }
-            
+
         } catch (err) {
-            console.error('Error in LLM judge validation:', err);
-            // Fail open - don't block on judge errors
+            logToOutput(`Error in LLM judge validation: ${err}`);
+            // Don't block on judge errors, return valid but don't retry immediately.
             return { isValid: true, reason: '', canRetry: false };
         }
     }
@@ -380,114 +407,179 @@ ${documentedCode}
         moduleName: string
     ): Promise<{ isValid: boolean; errors: string[]; canRetry: boolean }> {
         const errors: string[] = [];
-        
+
+        // --- Logic Fix: Ensure cleanup with a try/finally block ---
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            logToOutput('No workspace folder for validation');
+            return { isValid: true, errors: [], canRetry: false };
+        }
+
+        const tempDir = path.join(workspaceFolder.uri.fsPath, 'target', '.rusty-refactor-temp');
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+        }
+
+        const tempFilePath = path.join(tempDir, `${moduleName}_validation.rs`);
+        const tempFileUri = vscode.Uri.file(tempFilePath);
+
         try {
             // Basic structural validation first
             if (!this.hasBasicStructure(documentedCode, originalCode)) {
                 errors.push('Code structure was modified or lost');
                 return { isValid: false, errors, canRetry: true };
             }
-            
-            // Create a temporary file to validate with rust-analyzer
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            if (!workspaceFolder) {
-                // Can't validate without workspace, but don't fail
-                console.warn('No workspace folder for validation');
-                return { isValid: true, errors: [], canRetry: false };
-            }
-            
-            const tempDir = path.join(workspaceFolder.uri.fsPath, 'target', '.rusty-refactor-temp');
-            if (!fs.existsSync(tempDir)) {
-                fs.mkdirSync(tempDir, { recursive: true });
-            }
-            
-            const tempFilePath = path.join(tempDir, `${moduleName}_validation.rs`);
-            const tempFileUri = vscode.Uri.file(tempFilePath);
-            
+
             // Write the documented code to temp file
             fs.writeFileSync(tempFilePath, documentedCode, 'utf-8');
-            
+
             // Open the document in VS Code (but don't show it)
             const document = await vscode.workspace.openTextDocument(tempFileUri);
-            
-            // Wait for rust-analyzer to process the file
+
+            // Wait for rust-analyzer to process the file (use a more reliable method if possible)
             await new Promise(resolve => setTimeout(resolve, 1000));
-            
+
             // Get diagnostics using built-in VS Code API
             const diagnostics = vscode.languages.getDiagnostics(tempFileUri);
             const errorDiagnostics = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
-            
+
             if (errorDiagnostics.length > 0) {
                 errors.push(...errorDiagnostics.map(d => `${d.message} at line ${d.range.start.line + 1}`));
-                
+
                 // Check if errors are documentation-related (can retry) or structural (can't retry)
-                const isDocError = errorDiagnostics.some(d => 
+                const isDocError = errorDiagnostics.some(d =>
                     d.message.includes('expected item') ||
                     d.message.includes('doc comment') ||
                     d.message.includes('expected expression')
                 );
-                
-                // Clean up temp file
-                try {
-                    fs.unlinkSync(tempFilePath);
-                } catch (e) {
-                    // Ignore cleanup errors
-                }
-                
+
                 return { isValid: false, errors, canRetry: isDocError };
             }
-            
+
             // Check if symbols are properly detected using built-in VS Code symbol provider
             const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
                 'vscode.executeDocumentSymbolProvider',
                 tempFileUri
             );
-            
+
             if (!symbols || symbols.length === 0) {
                 errors.push('No symbols detected in generated code - may be malformed');
-                
-                // Clean up temp file
-                try {
-                    fs.unlinkSync(tempFilePath);
-                } catch (e) {
-                    // Ignore cleanup errors
-                }
-                
                 return { isValid: false, errors, canRetry: true };
             }
-            
+
             // Validate that key symbols from original code are present
             const symbolNames = this.extractSymbolNames(symbols);
             const originalSymbols = this.extractSymbolsFromCode(originalCode);
-            
+
             const missingSymbols = originalSymbols.filter(s => !symbolNames.includes(s));
             if (missingSymbols.length > 0) {
                 errors.push(`Missing symbols: ${missingSymbols.join(', ')}`);
-                
-                // Clean up temp file
-                try {
-                    fs.unlinkSync(tempFilePath);
-                } catch (e) {
-                    // Ignore cleanup errors
-                }
-                
                 return { isValid: false, errors, canRetry: true };
             }
-            
-            // Clean up temp file
+
+            // All validations passed
+            return { isValid: true, errors: [], canRetry: false };
+
+        } catch (err) {
+            logToOutput(`Error during validation: ${err}`);
+            return { isValid: true, errors: [], canRetry: false };
+        } finally {
+            // Fix: Ensure cleanup code runs regardless of success or failure in the try block.
             try {
-                fs.unlinkSync(tempFilePath);
+                if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                }
             } catch (e) {
                 // Ignore cleanup errors
             }
-            
-            // All validations passed
-            return { isValid: true, errors: [], canRetry: false };
-            
-        } catch (err) {
-            console.error('Error during validation:', err);
-            // Don't fail on validation errors, just log
-            return { isValid: true, errors: [], canRetry: false };
+        }
+    }
+    /**
+     * Helper function to select a language model based on user preferences.
+     * @returns A promise resolving to the selected model or null if none are available.
+     */
+    private async selectDocumentationModel(): Promise<vscode.LanguageModelChat | null> {
+        // Query all available models
+        const allModels = await vscode.lm.selectChatModels();
+        
+        if (allModels.length === 0) {
+            logToOutput('No language models available');
+            return null;
+        }
+
+        // Filter out models with insufficient token limits (need at least 4000 for documentation)
+        const suitableModels = allModels.filter(m => m.maxInputTokens >= 4000);
+        
+        if (suitableModels.length === 0) {
+            logToOutput('No models with sufficient token capacity found');
+            vscode.window.showWarningMessage('No suitable language models available for documentation generation (need at least 4000 input tokens).');
+            return null;
+        }
+
+        // Check if user has a preferred model in settings
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+        const preferredModelId = config.get<string>('aiPreferredModel');
+
+        // Try to find the preferred model
+        if (preferredModelId) {
+            const preferredModel = suitableModels.find(m => `${m.vendor}/${m.family}` === preferredModelId);
+            if (preferredModel) {
+                logToOutput(`Using preferred model: ${preferredModel.name} (${preferredModel.vendor}/${preferredModel.family})`);
+                logToOutput(`Model capabilities: maxInputTokens=${preferredModel.maxInputTokens}`);
+                return preferredModel;
+            }
+            logToOutput(`Preferred model ${preferredModelId} not available or doesn't meet requirements`);
+        }
+
+        // If no preference or preferred not available, use the first suitable model
+        const model = suitableModels[0];
+        logToOutput(`Selected model: ${model.name} (${model.vendor}/${model.family})`);
+        logToOutput(`Model capabilities: maxInputTokens=${model.maxInputTokens}`);
+        return model;
+    }
+
+    /**
+     * Shows a quick pick dialog to let the user select their preferred AI model.
+     * Saves the selection to workspace settings.
+     */
+    async selectPreferredModel(): Promise<void> {
+        const allModels = await vscode.lm.selectChatModels();
+        
+        if (allModels.length === 0) {
+            vscode.window.showWarningMessage('No language models available.');
+            return;
+        }
+
+        // Filter to suitable models
+        const suitableModels = allModels.filter(m => m.maxInputTokens >= 4000);
+        
+        if (suitableModels.length === 0) {
+            vscode.window.showWarningMessage('No language models with sufficient capacity (4000+ tokens) available.');
+            return;
+        }
+
+        const items = suitableModels.map(model => ({
+            label: model.name,
+            description: `${model.vendor}/${model.family}`,
+            detail: `Vendor: ${model.vendor}, Family: ${model.family}, Max tokens: ${model.maxInputTokens}`,
+            modelId: `${model.vendor}/${model.family}`
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Select your preferred AI model for documentation',
+            title: 'Choose AI Model'
+        });
+
+        if (selected) {
+            try {
+                const config = vscode.workspace.getConfiguration('rustyRefactor');
+                await config.update('aiPreferredModel', selected.modelId, vscode.ConfigurationTarget.Global);
+                vscode.window.showInformationMessage(`AI model set to: ${selected.label}. Reload VS Code if you just installed this extension.`);
+            } catch (error) {
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Failed to save model preference: ${errorMsg}. Please reload VS Code and try again.`);
+                logToOutput(`Error saving aiPreferredModel: ${errorMsg}`);
+            }
         }
     }
 
@@ -503,7 +595,7 @@ ${documentedCode}
     ): Promise<string | null> {
         try {
             const errorSummary = previousErrors.join('; ');
-            
+
             const messages = [
                 vscode.LanguageModelChatMessage.User(
                     `You are an expert in Rust and its documentation conventions (rustdoc).
@@ -527,36 +619,36 @@ ${documentedCode}
                     `Module name: ${moduleName}\n\nCode:\n\n${code}`
                 )
             ];
-            
+
             const requestOptions: vscode.LanguageModelChatRequestOptions = {
                 justification: 'Retrying Rust documentation generation with corrections'
             };
-            
+
             const response = await model.sendRequest(
                 messages,
                 requestOptions,
                 new vscode.CancellationTokenSource().token
             );
-            
+
             let documentedCode = '';
             for await (const fragment of response.text) {
                 documentedCode += fragment;
             }
-            
+
             const cleaned = this.cleanMarkdownCodeBlocks(documentedCode);
-            
+
             // Validate again (don't retry a second time)
             const validationResult = await this.validateWithDiagnostics(cleaned, code, moduleName);
-            
+
             if (!validationResult.isValid) {
-                console.warn('Retry failed validation, using original code');
+                logToOutput('Retry failed validation, using original code');
                 return null;
             }
-            
+
             return cleaned;
-            
+
         } catch (err) {
-            console.error('Error in retry:', err);
+            logToOutput(`Error in retry: ${err}`);
             return null;
         }
     }
@@ -570,7 +662,7 @@ ${documentedCode}
         const fnMatch = originalCode.match(/fn\s+\w+/g);
         const enumMatch = originalCode.match(/enum\s+\w+/g);
         const implMatch = originalCode.match(/impl\s+/g);
-        
+
         if (structMatch && !structMatch.every(s => documentedCode.includes(s))) return false;
         if (fnMatch && !fnMatch.every(f => documentedCode.includes(f))) return false;
         if (enumMatch && !enumMatch.every(e => documentedCode.includes(e))) return false;
@@ -578,12 +670,12 @@ ${documentedCode}
             const implCount = (documentedCode.match(/impl\s+/g) || []).length;
             if (implCount !== implMatch.length) return false;
         }
-        
+
         // Check brace balance
         const openBraces = (documentedCode.match(/\{/g) || []).length;
         const closeBraces = (documentedCode.match(/\}/g) || []).length;
         if (openBraces !== closeBraces) return false;
-        
+
         return true;
     }
 
@@ -592,14 +684,14 @@ ${documentedCode}
      */
     private extractSymbolNames(symbols: vscode.DocumentSymbol[]): string[] {
         const names: string[] = [];
-        
+
         for (const symbol of symbols) {
             names.push(symbol.name);
             if (symbol.children && symbol.children.length > 0) {
                 names.push(...this.extractSymbolNames(symbol.children));
             }
         }
-        
+
         return names;
     }
 
@@ -608,31 +700,31 @@ ${documentedCode}
      */
     private extractSymbolsFromCode(code: string): string[] {
         const symbols: string[] = [];
-        
+
         // Extract struct names
         const structMatches = code.matchAll(/pub\s+struct\s+(\w+)|struct\s+(\w+)/g);
         for (const match of structMatches) {
             symbols.push(match[1] || match[2]);
         }
-        
+
         // Extract function names
         const fnMatches = code.matchAll(/pub\s+fn\s+(\w+)|fn\s+(\w+)/g);
         for (const match of fnMatches) {
             symbols.push(match[1] || match[2]);
         }
-        
+
         // Extract enum names
         const enumMatches = code.matchAll(/pub\s+enum\s+(\w+)|enum\s+(\w+)/g);
         for (const match of enumMatches) {
             symbols.push(match[1] || match[2]);
         }
-        
+
         // Extract trait names
         const traitMatches = code.matchAll(/pub\s+trait\s+(\w+)|trait\s+(\w+)/g);
         for (const match of traitMatches) {
             symbols.push(match[1] || match[2]);
         }
-        
+
         return symbols;
     }
 
@@ -643,17 +735,17 @@ ${documentedCode}
      */
     private handleLanguageModelError(err: vscode.LanguageModelError): void {
         switch (err.code) {
-            case vscode.LanguageModelError.NotFound.name:
+            case 'NotFound':
                 vscode.window.showWarningMessage(
                     'The selected language model is not available. Documentation generation was skipped.'
                 );
                 break;
-            case vscode.LanguageModelError.NoPermissions.name:
+            case 'NoPermissions':
                 vscode.window.showWarningMessage(
                     'You do not have permission to use the language model. Please ensure GitHub Copilot is enabled and configured correctly.'
                 );
                 break;
-            case vscode.LanguageModelError.Blocked.name:
+            case 'Blocked':
                 vscode.window.showWarningMessage(
                     'The request was blocked by a content filter. Documentation generation was skipped.'
                 );
@@ -664,5 +756,20 @@ ${documentedCode}
                 );
                 break;
         }
+    }
+
+    private isLanguageModelError(err: unknown): err is vscode.LanguageModelError {
+        const LanguageModelErrorCtor = (vscode as unknown as { LanguageModelError?: new (...args: any[]) => vscode.LanguageModelError }).LanguageModelError;
+
+        if (typeof LanguageModelErrorCtor === 'function' && err instanceof LanguageModelErrorCtor) {
+            return true;
+        }
+
+        if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
+            const code = (err as { code?: unknown }).code;
+            return typeof code === 'string' && ['NotFound', 'NoPermissions', 'Blocked', 'ModelOverloaded', 'ServiceUnavailable', 'TranscriptTooLong', 'Unknown'].includes(code);
+        }
+
+        return false;
     }
 }

@@ -460,8 +460,6 @@ impl NameResolver {
     }
 
     fn get_local_project_items(&self, workspace_root: &Path) -> Result<Vec<ImportableItem>> {
-        let mut items = Vec::new();
-
         // Use cargo metadata to get project structure
         let output = Command::new("cargo")
             .args(&["metadata", "--format-version=1", "--no-deps"])
@@ -469,7 +467,7 @@ impl NameResolver {
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow!("Failed to get cargo metadata: {}", 
+            return Err(anyhow!("Failed to get cargo metadata: {}",
                 String::from_utf8_lossy(&output.stderr)));
         }
 
@@ -481,7 +479,7 @@ impl NameResolver {
         // 3. Index items by name for fast lookup
         
         // For now, return empty list
-        Ok(items)
+        Ok(Vec::new())
     }
 
     fn get_common_external_items(&self) -> Vec<ImportableItem> {

@@ -45,7 +45,7 @@ export class ModuleExtractorPanel {
     private _disposables: vscode.Disposable[] = [];
     private _fileSearchProvider: FileSearchProvider;
     private _workspaceFolder: vscode.WorkspaceFolder;
-    private _currentPath: string = 'src';
+    private _currentPath: string = '';
     private _moduleName: string = '';
     private _selectedCode: string = '';
     private _analysisResult: any;
@@ -135,26 +135,44 @@ export class ModuleExtractorPanel {
         // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
             async (message) => {
-                ModuleExtractorPanel.log(`Received message from webview: ${message.command}`);
-                console.log('Received message from webview:', message);
-                switch (message.command) {
-                    case 'selectDirectory':
-                        ModuleExtractorPanel.log(`Selecting directory: ${message.path}`);
-                        this._selectDirectory(message.path);
-                        break;
-                    case 'confirmSelection':
-                        ModuleExtractorPanel.log('Confirming selection');
-                        this._confirmSelection();
-                        break;
-                    case 'cancel':
-                        ModuleExtractorPanel.log('Cancelling');
-                        this._cancel();
-                        break;
-                    case 'ready':
-                        ModuleExtractorPanel.log('Webview is ready, loading initial data');
-                        console.log('Webview is ready, loading initial data');
-                        await this._loadInitialData();
-                        break;
+                try {
+                    ModuleExtractorPanel.log(`Received message from webview: ${message.command}`);
+                    
+                    switch (message.command) {
+                        case 'selectDirectory':
+                            ModuleExtractorPanel.log(`Selecting directory: ${message.path}`);
+                            await this._selectDirectory(message.path);
+                            break;
+                        case 'confirmSelection':
+                            ModuleExtractorPanel.log('Confirming selection');
+                            this._confirmSelection();
+                            break;
+                        case 'cancel':
+                            ModuleExtractorPanel.log('Cancelling');
+                            this._cancel();
+                            break;
+                        case 'ready':
+                            ModuleExtractorPanel.log('Webview is ready, loading initial data');
+                            await this._loadInitialData();
+                            break;
+                        case 'log':
+                            // Handle log messages from webview
+                            if (message.level && message.message) {
+                                const logMessage = `[Webview] ${message.message}`;
+                                if (message.data) {
+                                    ModuleExtractorPanel.log(`${logMessage} - ${JSON.stringify(message.data)}`);
+                                } else {
+                                    ModuleExtractorPanel.log(logMessage);
+                                }
+                            }
+                            break;
+                        default:
+                            ModuleExtractorPanel.log(`Unknown message command: ${message.command}`);
+                            break;
+                    }
+                } catch (error) {
+                    ModuleExtractorPanel.log(`Error handling webview message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                    console.error('Error handling webview message:', error);
                 }
             },
             undefined,
@@ -169,6 +187,8 @@ export class ModuleExtractorPanel {
         this._moduleName = moduleName;
         this._selectedCode = selectedCode;
         this._analysisResult = analysisResult;
+        
+        // Send update immediately if webview is ready, otherwise it will be sent when ready message is received
         this._panel?.webview.postMessage({
             command: 'updateData',
             moduleName,
@@ -181,16 +201,35 @@ export class ModuleExtractorPanel {
         ModuleExtractorPanel.log(`Loading initial data for path: ${this._currentPath}`);
         console.log('Loading initial data for path:', this._currentPath);
         
-        // Update current path display
-        this._panel?.webview.postMessage({
-            command: 'updateCurrentPath',
-            currentPath: this._currentPath
-        });
-        
-        // Load directory items
-        await this._loadDirectoryItems(this._currentPath);
-        ModuleExtractorPanel.log('Initial data loaded successfully');
-        console.log('Initial data loaded successfully');
+        try {
+            // Send the current data to webview first
+            this._panel?.webview.postMessage({
+                command: 'updateData',
+                moduleName: this._moduleName,
+                selectedCode: this._selectedCode,
+                analysisResult: this._analysisResult
+            });
+            
+            // Load directory items - this will also update the current path display
+            await this._loadDirectoryItems(this._currentPath);
+            ModuleExtractorPanel.log('Initial data loaded successfully');
+            console.log('Initial data loaded successfully');
+        } catch (error) {
+            ModuleExtractorPanel.log(`Error loading initial data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error loading initial data:', error);
+            
+            // Send error state to webview
+            this._panel?.webview.postMessage({
+                command: 'updateDirectory',
+                currentPath: this._currentPath,
+                parentPath: this._parentPath(this._currentPath),
+                directories: [],
+                moduleFiles: [],
+                suggestions: [],
+                breadcrumb: this._generateBreadcrumb(this._currentPath),
+                error: 'Failed to load directory contents'
+            });
+        }
     }
     
     private async _selectDirectory(dirPath: string) {
@@ -354,13 +393,17 @@ export class ModuleExtractorPanel {
 
     private _parentPath(relativePath: string): string {
         const normalized = this._normalizePath(relativePath);
-        if (!normalized || normalized === 'src') {
-            return 'src';
+        if (!normalized) {
+            return '';
+        }
+
+        if (normalized === 'src') {
+            return '';
         }
 
         const segments = this._splitPath(normalized);
         if (segments.length <= 1) {
-            return 'src';
+            return '';
         }
 
         return segments.slice(0, -1).join('/');
@@ -399,13 +442,13 @@ export class ModuleExtractorPanel {
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
-        // Get path to resource on disk
+        // Get path to built webview resources
         const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'styles.css')
+            vscode.Uri.joinPath(this._extensionUri, 'out', 'webview', 'module-extractor.css')
         );
         
         const scriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'main.js')
+            vscode.Uri.joinPath(this._extensionUri, 'out', 'webview', 'module-extractor.js')
         );
         
         const codiconsUri = webview.asWebviewUri(
@@ -420,8 +463,8 @@ export class ModuleExtractorPanel {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <meta http-equiv="Content-Security-Policy" content="
                     default-src 'none';
-                    script-src ${webview.cspSource};
-                    style-src ${webview.cspSource} ${codiconsUri};
+                    script-src ${webview.cspSource} 'unsafe-inline';
+                    style-src ${webview.cspSource} ${codiconsUri} 'unsafe-inline';
                     font-src ${webview.cspSource};
                     img-src ${webview.cspSource} data:;
                 ">
@@ -439,11 +482,11 @@ export class ModuleExtractorPanel {
                         <div class="module-info">
                             <div class="info-item">
                                 <label>Module Name:</label>
-                                <span class="module-name">${this._moduleName}</span>
+                                <span id="module-name" class="module-name">Loading...</span>
                             </div>
                             <div class="info-item">
                                 <label>Selected Code:</label>
-                                <span class="code-preview">${this._selectedCode.substring(0, 100)}${this._selectedCode.length > 100 ? '...' : ''}</span>
+                                <span id="code-preview" class="code-preview">Loading...</span>
                             </div>
                         </div>
                     </div>
@@ -472,7 +515,7 @@ export class ModuleExtractorPanel {
                                     <i class="codicon codicon-x"></i> Cancel
                                 </button>
                                 <button id="create-btn" class="btn btn-primary" disabled>
-                                    <i class="codicon codicon-check"></i> Extract to <span class="highlight">${this._moduleName}.rs</span>
+                                    <i class="codicon codicon-check"></i> Extract to <span class="highlight">Loading...</span>
                                 </button>
                             </div>
                             
@@ -499,6 +542,12 @@ export class ModuleExtractorPanel {
                     </div>
                 </div>
                 
+                <script>
+                    console.log('[Webview] HTML loaded, script starting...');
+                    window.addEventListener('error', (e) => {
+                        console.error('[Webview] Global error:', e.error || e.message);
+                    });
+                </script>
                 <script src="${scriptUri}"></script>
             </body>
             </html>

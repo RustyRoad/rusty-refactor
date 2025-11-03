@@ -4,12 +4,27 @@ A powerful VSCode extension for extracting Rust code into modules with intellige
 
 ## ✨ Features
 
-### 💬 Copilot Chat Integration (NEW!)
-- **Language Model Tools**: Use Rusty Refactor directly in Copilot Chat with natural language commands
-  - `#extract_rust_module`: Ask Copilot to extract Rust code to a new module
-  - `#analyze_rust`: Ask Copilot to analyze Rust code structure and dependencies
-- **Agent Mode Support**: Copilot can automatically invoke extraction tools as part of its refactoring workflow
-- **Intelligent Tool Calling**: Natural conversation flow - Copilot understands context and suggests refactoring
+### 💬 Copilot Chat Integration (Enhanced!)
+- **Three Language Model Tools** optimized for zero-work LLM consumption:
+  - `rustyRefactor_refactor_file`: Orchestration tool that refactors entire files in one command
+  - `rustyRefactor_extract_to_module`: Extract specific code to a new module
+  - `rustyRefactor_analyze_rust_code`: Analyze code structure and dependencies
+- **Structured JSON Outputs**: All tools return 100% structured data - no parsing needed!
+  - Success/failure indicators, recommended actions, extracted items
+  - Actionable error messages with specific fixes
+  - Complete import statements and usage examples
+- **Intelligent Import Suggestions**: Name resolution engine with confidence scores
+  - 50+ std library items, external crates (serde, tokio, clap)
+  - Edit distance matching for fuzzy search
+  - Returns JSON: `{"type_name": "HashMap", "import_path": "std::collections::HashMap", "confidence": 1.0}`
+- **Incremental Cache System**: Salsa-style caching for instant repeat analysis
+  - Zstd compression, SHA-256 keys, LRU cleanup
+  - Logs: "⚡ Cache HIT! (Hit rate: 85.3%)"
+- **Auto-Routing**: Automatically routes symbols to RustyRoad conventions
+  - Data models → `src/models/`
+  - Services → `src/services/`
+  - Utilities → `src/utils/`
+- **Agent Mode Support**: Copilot can chain multiple operations automatically
 - **Confirmation Dialogs**: User-friendly confirmations before any refactoring operations
 
 ### 🤖 AI-Powered Documentation with Multi-Layer Validation
@@ -52,29 +67,84 @@ Built specifically for [RustyRoad](https://github.com/RustyRoad/RustyRoad) proje
 
 ## 💬 Using with Copilot Chat
 
-Rusty Refactor is now available as a **Language Model Tool** in Copilot Chat! You can use natural language to refactor your Rust code.
+Rusty Refactor provides **three Language Model Tools** in Copilot Chat, all optimized for zero-work LLM consumption with 100% structured JSON outputs!
 
-### Extract Code via Copilot Chat
+### Refactor Entire Files (Orchestration Tool)
 
-Open the Copilot Chat panel and ask Copilot to help with refactoring:
-
-```
-@copilot #extract_rust_module Extract the create method from src/models/email.rs (lines 15-35) to a module named "email_repository" in src/models/repositories/
-```
-
-Or use the analyze tool first:
+The most powerful way to refactor - let the tool handle everything:
 
 ```
-@copilot #analyze_rust Analyze the code in src/models/email.rs from lines 1 to 50 to understand what I'm working with
+@workspace refactor examples/sample.rs
+```
+
+This single command will:
+1. Analyze the entire file to find all extractable symbols
+2. Auto-route each symbol to the right place (models/, services/, utils/)
+3. Extract each symbol to its own module
+4. Suggest missing imports with confidence scores
+5. Return complete refactoring plan with step-by-step log
+
+**Example output:**
+```json
+{
+  "success": true,
+  "extracted_modules": [
+    {"module_name": "user", "module_path": "src/models/user.rs", "symbols": ["User"]},
+    {"module_name": "database", "module_path": "src/services/database.rs", "symbols": ["Database", "Connection"]}
+  ],
+  "suggested_imports": [
+    {"type_name": "HashMap", "import_path": "std::collections::HashMap", "confidence": 1.0}
+  ],
+  "summary": "✓ Refactoring complete: 8/8 steps successful"
+}
+```
+
+### Extract Specific Code
+
+For precise control, extract specific symbols:
+
+```
+@workspace extract User struct from examples/sample.rs to src/models
+```
+
+**Structured output:**
+```json
+{
+  "success": true,
+  "module_name": "user",
+  "extracted_items": {"functions": ["new", "display"], "structs": ["User"]},
+  "usage": "use crate::user::*;"
+}
+```
+
+### Analyze Before Refactoring
+
+Understand code structure first:
+
+```
+@workspace analyze examples/sample.rs
+```
+
+**Structured output:**
+```json
+{
+  "extractable": true,
+  "recommended_action": "extract_to_module with functionName: 'new' for symbol-based extraction",
+  "functions": [{"name": "new", "visibility": "pub"}],
+  "structs": [{"name": "User", "field_count": 3}]
+}
 ```
 
 ### Why Use Copilot Chat?
 
-- **Natural Language**: Describe what you want to extract in plain English
-- **Context-Aware**: Copilot understands your code and makes intelligent suggestions
-- **Automated**: Let Copilot handle the extraction while you focus on design
-- **Confirmation**: Always review and confirm before changes are applied
-- **Integrated**: Works alongside Copilot's code analysis and suggestions
+- **Zero-Work for LLMs**: 100% structured JSON outputs - no parsing required
+- **Intelligent Routing**: Automatically follows RustyRoad conventions
+- **Actionable Errors**: "Use lowercase with underscores (e.g., 'user_service')"
+- **Complete Metadata**: Import statements, confidence scores, execution logs
+- **Natural Language**: Describe what you want in plain English
+- **Automated**: Let Copilot handle the entire refactoring workflow
+- **Fast**: Incremental cache system speeds up repeated analysis
+- **Smart Imports**: Name resolution engine suggests missing imports
 
 ## 📖 Usage Examples
 
@@ -276,6 +346,9 @@ The extension automatically:
   // AI Documentation (requires GitHub Copilot)
   "rustyRefactor.aiAutoDocumentation": false,  // Set to true to always generate
   "rustyRefactor.aiAskEachTime": true,         // Ask before generating each time
+  
+  // AI Model Selection (format: "vendor/family")
+  "rustyRefactor.aiPreferredModel": "copilot/gpt-4o",
   
   // Maximum directory depth for file search
   "rustyRefactor.searchDepth": 5

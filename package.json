@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.4.10",
+  "version": "0.4.35",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -43,6 +43,10 @@
       {
         "command": "rustyRefactor.extractToModuleCustomPath",
         "title": "Rusty Refactor: Extract to Module (Custom Path)"
+      },
+      {
+        "command": "rustyRefactor.selectAIModel",
+        "title": "Rusty Refactor: Select AI Model for Documentation"
       }
     ],
     "languageModelTools": [
@@ -188,6 +192,11 @@
           "default": true,
           "description": "Ask before generating AI documentation each time (if aiAutoDocumentation is false)"
         },
+        "rustyRefactor.aiPreferredModel": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred AI model for documentation (format: vendor/family). Use 'Rusty Refactor: Select AI Model' command to choose."
+        },
         "rustyRefactor.searchDepth": {
           "type": "number",
           "default": 5,
@@ -197,17 +206,19 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run build:rust && npm run compile",
+    "vscode:prepublish": "npm run build",
     "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile",
+    "build:ts": "rsbuild build",
+    "build": "npm run build:rust && npm run build:ts",
+    "watch": "rsbuild build --watch",
+    "watch:ts": "rsbuild build --watch",
+    "dev": "rsbuild dev",
+    "pretest": "npm run build",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
     "package": "vsce package",
     "publish": "vsce publish",
-    "build": "npm run build:rust && npm run compile",
-    "package-publish": "npm run build && npm run package"
+    "package-publish": "npm run package"
   },
   "devDependencies": {
     "@types/node": "24.9.2",
@@ -215,6 +226,7 @@
     "@vscode/vsce": "3.6.2",
     "@typescript-eslint/eslint-plugin": "8.46.2",
     "@typescript-eslint/parser": "8.46.2",
+    "@rsbuild/core": "1.6.0",
     "eslint": "9.39.0",
     "typescript": "^5.0.4"
   },

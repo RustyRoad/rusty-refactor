@@ -1,9 +1,51 @@
-# Ignore common files/folders that should not be published in the VSIX
+# Source files - don't include in package
+src/
+webview-src/
+*.ts
+!*.d.ts
+**/*.map
+
+# Build configs
+tsconfig.json
+rsbuild.config.ts
+**/.eslintrc.json
+.eslintrc.js
+
+# Development files
+.vscode/
+.vscode-test/
+.git/
+.gitignore
+.gitattributes
+*.vsix
+*.log
+.yarnrc
+vsc-extension-quickstart.md
+
+# Dependencies
 node_modules/
-**/target/
-target/
-rust-backend/target/
+
+# Rust source - exclude but keep binaries
+rust-backend/src/
+rust-backend/napi_bridge/
+rust-backend/Cargo.toml
+rust-backend/Cargo.lock
+rust-backend/rust-toolchain.toml
+rust-backend/build.rs
 rust-backend/.cargo/
+rust-backend/target/debug/
+rust-backend/target/CACHEDIR.TAG
+rust-backend/target/rust-analyzer/
+**/target/
+
+# Keep only the compiled Rust binaries
+!rust-backend/target/release/rusty_refactor_worker.exe
+!rust-backend/target/release/rusty_refactor_worker.dll
+!rust-backend/target/release/rusty_refactor_worker
+!rust-backend/target/release/librusty_refactor_worker.so
+!rust-backend/target/release/librusty_refactor_worker.dylib
+
+# Security
 **/*.pdb
 **/*.rlib
 **/*.rlib.meta
@@ -13,34 +55,38 @@ rust-backend/.cargo/
 **/*.pfx
 **/*.private
 **/*.env
-.git/
-.gitignore
-.vscode/
-*.vsix
-*.log
+
+# Test files
 out/test/
 
-# Keep package files and built extension output
+# Build scripts
+build.bat
+build.ps1
+Makefile
+rebuild-and-check.ps1
+
+# Documentation (keep README)
+BUILD.md
+PUBLISHING.md
+CHANGELOG.md
+GETTING_STARTED.md
+AI_DOCUMENTATION_TROUBLESHOOTING.md
+MODULAR_ARCHITECTURE.md
+REFACTORING_FIXES.md
+RUST_COMPILER_BRIDGE.md
+RUST_SETUP.md
+SYMBOL_MATCHING_IMPLEMENTATION.md
+requirements.md
+requirements-spotless.md
+
+# Examples
+examples/
+
+# GitHub
+.github/
+
+# Keep the built extension files
 !out/**
 !package.json
-!README.mdnode_modules/
-*.vsix
-src/
-.vscode/
-*.ts
-!*.d.ts
-.gitignore
-.yarnrc
-vsc-extension-quickstart.md
-**/tsconfig.json
-**/.eslintrc.json
-**/*.map
-**/*.ts
-
-# Rust backend - exclude source but INCLUDE the compiled binary
-rust-backend/src/
-rust-backend/Cargo.toml
-rust-backend/Cargo.lock
-rust-backend/target/debug/
-!rust-backend/target/release/rusty_refactor_worker
-!rust-backend/target/release/rusty_refactor_worker.exe
+!README.md
+!LICENSE

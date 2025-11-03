@@ -4,6 +4,88 @@ All notable changes to the "Rusty Refactor" extension will be documented in this
 
 ## [Unreleased]
 
+## [0.4.36] - 2025-11-03
+
+### Added - LLM Integration Revolution 🤖
+
+**Complete optimization for GitHub Copilot Chat with zero-work structured outputs!**
+
+#### High-Level Orchestration Tool
+- **`rustyRefactor_refactor_file`**: New orchestration tool that refactors entire files in one command
+  - Automatically analyzes file to discover all extractable symbols
+  - Auto-routes symbols to appropriate modules based on RustyRoad conventions:
+    - Structs with data → `src/models/`
+    - Service logic → `src/services/`
+    - Generic utilities → `src/utils/`
+  - Extracts each symbol to its own module
+  - Suggests missing imports with confidence scores
+  - Returns complete refactoring plan with step-by-step execution log
+  - **100% structured JSON output** - LLMs don't need to parse anything!
+
+#### Enhanced Language Model Tools
+- **`rustyRefactor_analyze_rust_code`**: Now returns structured JSON with:
+  - `extractable: true/false` flag
+  - `recommended_action` field with exact next steps
+  - Complete list of available symbols for extraction
+  - Function names, struct names, enum names, trait names
+  - Dependency analysis and used types
+- **`rustyRefactor_extract_to_module`**: Now returns structured JSON with:
+  - `success: true/false` status
+  - `module_name` and `module_path` for verification
+  - `extracted_items` with counts of functions, structs, enums, traits
+  - `public_exports` list with exact import statements
+  - `usage` field showing how to import the new module
+- **Actionable Error Messages**: All errors include specific fixes:
+  - "Use lowercase with underscores (e.g., 'user_service')"
+  - "File must be a .rs file. Try: /path/to/file.rs"
+  - Exact line numbers and descriptions for all failures
+
+#### Incremental Compilation Cache
+- **IncrementalCache**: Salsa-style query caching system (previously unused, now integrated!)
+  - Zstd compression for HIR/MIR analysis data
+  - SHA-256 cache keys based on file path + content
+  - LRU cleanup with configurable max entries
+  - File hash validation for cache invalidation
+  - Dependency tracking for incremental compilation
+  - Cache hit/miss logging: "⚡ Cache HIT! (Hit rate: 85.3%)"
+  - 5 NAPI functions exposed: `createCache`, `getCachedAnalysis`, `cacheAnalysis`, `getCacheStats`, `clearCache`
+  - Integrated into `RustCodeAnalyzer` for instant repeat analysis
+
+#### Name Resolution Engine
+- **NameResolver**: Smart import suggestion engine (previously unused, now integrated!)
+  - Edit distance matching for fuzzy type name search (distance ≤2)
+  - 50+ common std library items: `HashMap`, `Arc`, `Mutex`, `Result`, `Option`, `Vec`, etc.
+  - External crate catalog: `serde::Serialize`, `tokio::spawn`, `clap::Parser`, `anyhow::Result`
+  - Confidence scoring: 1.0 = exact match, 0.8 = prefix, 0.6 = edit distance
+  - Caching support for resolved project names
+  - 4 NAPI functions exposed: `suggestImportsForTypes`, `getStdLibraryItems`, `findBestImport`, `resolveProjectNames`
+  - Returns structured JSON with import paths and confidence scores
+
+#### AI Model Selection
+- **User-Configurable Preferred Model**: New setting `rustyRefactor.aiPreferredModel`
+  - Format: "vendor/family" (e.g., "copilot/gpt-4o")
+  - Command: "Rusty Refactor: Select AI Model" for interactive picker
+  - Model filtering by `maxInputTokens >= 4000` to exclude unsupported models
+  - Better error messages when models are unavailable
+  - Logs model capabilities during selection
+
+### Improved
+- **LLM Consumption Optimized**: All tools designed for zero-work consumption by LLMs
+  - Structured JSON outputs eliminate parsing requirements
+  - Clear success/failure indicators
+  - Actionable error messages with specific solutions
+  - Recommended actions guide LLM's next steps
+- **Performance**: Cache system dramatically speeds up repeated analysis of same code
+- **Import Accuracy**: Name resolution engine provides confidence-scored import suggestions
+- **Developer Experience**: Clear logging shows cache hits, model selection, and validation steps
+
+### Technical Details
+- Rust backend now exposes 9 NAPI functions (5 cache + 4 name resolution)
+- TypeScript bridge automatically handles Promise wrappers
+- Cache uses SHA-256 for deterministic keys
+- Name resolution supports both exact and fuzzy matching
+- All tools registered in `languageModelTools.ts` for Copilot Chat
+
 ## [0.4.3] - 2025-11-01
 
 ### Added

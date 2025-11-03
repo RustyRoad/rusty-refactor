@@ -75,11 +75,8 @@ jobs:
           rust-backend/target
         key: rust-${{ runner.os }}-${{ hashFiles('rust-backend/**/Cargo.toml') }}
         
-    - name: Build Rust backend
-      run: cargo build --release --manifest-path rust-backend/Cargo.toml
-      
-    - name: Compile TypeScript
-      run: npm run compile
+    - name: Build all components
+      run: npm run build
       
     - name: Package extension
       run: |
