@@ -152,7 +152,7 @@ export class AIDocGenerator {
 
         } catch (err) {
             if (this.isLanguageModelError(err)) {
-                logToOutput(`Language Model Error: ${err.message, err.code}`);
+                logToOutput(`Language Model Error: ${err.message} (code: ${err.code})`);
                 this.handleLanguageModelError(err);
             } else {
                 logToOutput(`Error generating documentation: ${err}`);
