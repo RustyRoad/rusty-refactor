@@ -152,7 +152,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function handleExtractToModuleWithSearch(extensionUri: vscode.Uri) {
-    outputChannel.appendLine('=== Extract to Module with Search ===');
+    logToOutput('=== Extract to Module with Search ===');
     logToOutput('Starting extraction process');
 
     const editor = vscode.window.activeTextEditor;
