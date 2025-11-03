@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { AnalyzeRustCodeTool } from './AnalyzeRustCodeTool';
 import { ExtractToModuleTool } from './ExtractToModuleTool';
-import { suggestImportsForTypes, findBestImport } from './nativeBridge';
+import { suggestImportsForTypes } from './nativeBridge';
 
 /**
  * High-level orchestration tool that refactors an entire Rust file.
