@@ -4,7 +4,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { logToOutput } from './extractor';
-import { log } from 'console';
 
 /**
  * Provides AI-powered documentation generation for Rust code
