@@ -87,6 +87,14 @@ interface ModuleConversionInfo {
   module_name: string;
 }
 
+interface CacheStatsResult {
+  hits: number;
+  misses: number;
+  size_bytes: number;
+  entry_count: number;
+  hit_rate: number;
+}
+
 // Native loader that attempts to find the compiled addon
 function tryRequire(paths: string[]): any {
   for (const p of paths) {
@@ -94,7 +102,7 @@ function tryRequire(paths: string[]): any {
       console.log(`Trying to load native module from: ${p}`);
       if (fs.existsSync(p)) {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const mod = require(p);
+        const mod = require(/* webpackIgnore: true */ p);
         console.log(`Successfully loaded native module from: ${p}`);
         return mod;
       }
@@ -159,7 +167,7 @@ export function enhancedCargoCheck(workspaceRoot: string, targetFile: string): P
   }
 }
 
-export function suggestImportsForTypes(workspaceRoot: string, unresolvedTypes: string[]): Promise<ImportInfo[]> {
+export function suggestImportsForTypes(workspaceRoot: string, unresolvedTypes: string[]): Promise<string> {
   try {
     const native = getNativeModule();
     return native.suggest_imports_for_types(workspaceRoot, unresolvedTypes);
@@ -283,3 +291,89 @@ export function convertModuleToFolder(
   }
 }
 
+// ============================================================================
+// Cache Functions
+// ============================================================================
+
+export function createCache(workspaceRoot: string): Promise<string> {
+  try {
+    const native = getNativeModule();
+    return native.create_cache(workspaceRoot);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function getCachedAnalysis(workspaceRoot: string, filePath: string): Promise<string | null> {
+  try {
+    const native = getNativeModule();
+    return native.get_cached_analysis(workspaceRoot, filePath);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function cacheAnalysis(
+  workspaceRoot: string,
+  filePath: string,
+  analysisJson: string
+): Promise<boolean> {
+  try {
+    const native = getNativeModule();
+    return native.cache_analysis(workspaceRoot, filePath, analysisJson);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function getCacheStats(workspaceRoot: string): Promise<CacheStatsResult> {
+  try {
+    const native = getNativeModule();
+    return native.get_cache_stats(workspaceRoot);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function clearCache(workspaceRoot: string): Promise<boolean> {
+  try {
+    const native = getNativeModule();
+    return native.clear_cache(workspaceRoot);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+// ============================================================================
+// Name Resolution Functions
+// ============================================================================
+
+export function getStdLibraryItems(): Promise<string> {
+  try {
+    const native = getNativeModule();
+    return native.get_std_library_items();
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function findBestImport(
+  workspaceRoot: string,
+  typeName: string
+): Promise<string> {
+  try {
+    const native = getNativeModule();
+    return native.find_best_import(workspaceRoot, typeName);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function resolveProjectNames(workspaceRoot: string): Promise<string> {
+  try {
+    const native = getNativeModule();
+    return native.resolve_project_names(workspaceRoot);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}

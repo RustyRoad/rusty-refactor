@@ -10,8 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use toml;
 pub mod models;
+pub mod cache;
+pub mod name_resolution;
 
 pub use models::*;
+pub use cache::*;
+pub use name_resolution::*;
 #[derive(Deserialize, Debug)]
 struct CargoToml {
     dependencies: Option<HashMap<String, toml::Value>>,
@@ -174,9 +178,9 @@ pub fn enhanced_cargo_check(workspace_root: String, target_file: String) -> Resu
     }
 }
 
-/// Provide import suggestions for unresolved types
+/// Provide import suggestions for unresolved types (legacy version)
 #[napi]
-pub fn suggest_imports_for_types(
+pub fn suggest_imports_for_types_legacy(
     unresolved_types: Vec<String>,
     _workspace_root: String,
 ) -> Result<Vec<ImportInfo>> {
@@ -585,4 +589,180 @@ fn read_cargo_dependencies(workspace_root: &str) -> Vec<ExternalCrate> {
     }
 
     crates
+}
+
+// ============================================================================
+// NAPI Cache Bindings
+// ============================================================================
+
+/// Create a new incremental cache
+#[napi]
+pub fn create_cache(workspace_root: String) -> Result<String> {
+    let _cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    // Return a success indicator (in real implementation, we'd return a cache handle)
+    Ok(format!("Cache initialized at {}", workspace_root))
+}
+
+/// Get cached analysis for a file
+#[napi]
+pub fn get_cached_analysis(workspace_root: String, file_path: String) -> Result<Option<String>> {
+    let cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let entry = cache.get(Path::new(&file_path))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    // Return serialized cache data if found
+    Ok(entry.map(|e| format!("Cached: {} bytes HIR, {} bytes MIR", 
+        e.hir_data.len(), e.mir_data.len())))
+}
+
+/// Cache analysis results for a file
+#[napi]
+pub fn cache_analysis(
+    workspace_root: String,
+    file_path: String,
+    analysis_json: String,
+) -> Result<bool> {
+    let cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    // In real implementation, we'd serialize the analysis result properly
+    let hir_data = analysis_json.as_bytes();
+    let mir_data = &[]; // Placeholder
+    
+    let file_metadata = std::fs::metadata(&file_path)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let metadata = cache::CacheMetadata {
+        rustc_version: "1.70.0".to_string(), // Would detect actual version
+        dependencies: vec![],
+        file_mtime: file_metadata.modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        analysis_duration_ms: 0,
+        file_size: file_metadata.len(),
+    };
+    
+    cache.put(Path::new(&file_path), hir_data, mir_data, metadata)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    Ok(true)
+}
+
+/// Get cache statistics
+#[napi(object)]
+pub struct CacheStatsResult {
+    pub hits: u32,
+    pub misses: u32,
+    pub size_bytes: u32,
+    pub entry_count: u32,
+    pub hit_rate: f64,
+}
+
+#[napi]
+pub fn get_cache_stats(workspace_root: String) -> Result<CacheStatsResult> {
+    let cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let stats = cache.stats();
+    
+    Ok(CacheStatsResult {
+        hits: stats.hits as u32,
+        misses: stats.misses as u32,
+        size_bytes: stats.size_bytes as u32,
+        entry_count: stats.entry_count as u32,
+        hit_rate: stats.hit_rate(),
+    })
+}
+
+/// Clear the cache
+#[napi]
+pub fn clear_cache(workspace_root: String) -> Result<bool> {
+    let cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    cache.clear()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    Ok(true)
+}
+
+// ============================================================================
+// NAPI Name Resolution Bindings
+// ============================================================================
+
+/// Suggest imports for unresolved types using the name resolution engine
+#[napi]
+pub fn suggest_imports_for_types(
+    workspace_root: String,
+    unresolved_types: Vec<String>,
+) -> Result<String> {
+    let resolver = NameResolver::new();
+    
+    let matches = resolver.find_matches_for_types(&unresolved_types, Path::new(&workspace_root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    // Convert to JSON
+    let json = serde_json::to_string(&matches)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    Ok(json)
+}
+
+/// Get all importable items from std library
+#[napi]
+pub fn get_std_library_items() -> Result<String> {
+    let resolver = NameResolver::new();
+    
+    let items = resolver.get_std_items()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let json = serde_json::to_string(&items)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    Ok(json)
+}
+
+/// Find best import match for a single type
+#[napi]
+pub fn find_best_import(
+    workspace_root: String,
+    type_name: String,
+) -> Result<String> {
+    let resolver = NameResolver::new();
+    
+    let matches = resolver.find_matches_for_types(&[type_name], Path::new(&workspace_root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    // Get the best match (highest confidence)
+    if let Some(best_match) = matches.first() {
+        let json = serde_json::to_string(&best_match)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(json)
+    } else {
+        Ok("null".to_string())
+    }
+}
+
+/// Resolve all names in a project (expensive operation, use cache!)
+#[napi]
+pub fn resolve_project_names(workspace_root: String) -> Result<String> {
+    // Create resolver with cache
+    let cache = IncrementalCache::new(&workspace_root)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let resolver = NameResolver::with_cache(cache);
+    
+    let result = resolver.resolve_project(Path::new(&workspace_root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    let json = serde_json::to_string(&result)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    
+    Ok(json)
 }

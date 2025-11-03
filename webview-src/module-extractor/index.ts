@@ -1,14 +1,51 @@
+import './styles.css'; // @ts-ignore
+
+
+interface VSCodeAPI {
+    postMessage(message: any): void;
+    getState(): any;
+    setState(state: any): void;
+}
+
+declare function acquireVsCodeApi(): VSCodeAPI;
+
+interface TreeItem {
+    name: string;
+    path: string;
+    icon: string;
+    type: 'parent' | 'directory' | 'suggestion' | 'create' | 'module-file';
+    description?: string;
+    detail?: string;
+    needsConversion?: boolean;
+}
+
+interface DirectoryUpdateMessage {
+    command: 'updateDirectory';
+    currentPath: string;
+    parentPath: string;
+    directories: TreeItem[];
+    moduleFiles: TreeItem[];
+    suggestions: TreeItem[];
+    breadcrumb: string[];
+}
+
+interface DataUpdateMessage {
+    command: 'updateData';
+    moduleName: string;
+    selectedCode: string;
+    analysisResult: any;
+}
+
 (function() {
     const vscode = acquireVsCodeApi();
     
     // State
-    let currentPath = 'src';
-    let selectedPath = '';
+    let currentPath = '';
+    let selectedPath: string | null = null;
     let moduleName = '';
-    let moduleId = '';
     
     // Enhanced logging function
-    const log = (level, message, data = null) => {
+    const log = (level: string, message: string, data: any = null) => {
         const timestamp = new Date().toISOString();
         const formattedMessage = `[Webview ${timestamp}] [${level.toUpperCase()}] ${message}`;
         
@@ -21,9 +58,9 @@
         // Send log messages to extension for centralized logging
         vscode.postMessage({
             command: 'log',
-            level: level,
-            message: message,
-            data: data
+            level,
+            message,
+            data
         });
     };
     
@@ -42,7 +79,7 @@
                 'code-preview'
             ];
             
-            const missingElements = [];
+            const missingElements: string[] = [];
             requiredElements.forEach(id => {
                 const element = document.getElementById(id);
                 if (!element) {
@@ -59,8 +96,8 @@
             
             // Setup event listeners
             log('debug', 'Setting up event listeners');
-            document.getElementById('create-btn').addEventListener('click', handleConfirm);
-            document.getElementById('cancel-btn').addEventListener('click', handleCancel);
+            document.getElementById('create-btn')!.addEventListener('click', handleConfirm);
+            document.getElementById('cancel-btn')!.addEventListener('click', handleCancel);
             
             // Initialize state
             log('debug', 'Initial state', { currentPath, selectedPath, moduleName });
@@ -76,7 +113,7 @@
             log('info', 'Webview fully loaded, sending ready command');
             vscode.postMessage({ command: 'ready' });
             
-        } catch (error) {
+        } catch (error: any) {
             log('error', 'Failed to initialize webview', { error: error.message, stack: error.stack });
         }
     }
@@ -90,7 +127,7 @@
     }
     
     // Handle messages from extension
-    window.addEventListener('message', event => {
+    window.addEventListener('message', (event: MessageEvent) => {
         try {
             const message = event.data;
             if (!message || typeof message !== 'object' || typeof message.command !== 'string') {
@@ -101,27 +138,23 @@
             
             switch (message.command) {
                 case 'updateData':
-                    updateData(message);
+                    updateData(message as DataUpdateMessage);
                     break;
                 case 'updateDirectory':
-                    updateDirectory(message);
+                    updateDirectory(message as DirectoryUpdateMessage);
                     break;
                 case 'updateCurrentPath':
                     updateCurrentPathDisplay(message.currentPath);
                     break;
-                case 'log':
-                    // Log messages from extension (echo back for debugging)
-                    log('debug', `Extension log: [${message.level}] ${message.message}`, message.data);
-                    break;
                 default:
                     log('warn', `Unknown message command: ${message.command}`, message);
             }
-        } catch (error) {
+        } catch (error: any) {
             log('error', 'Error handling message from extension', { error: error.message, message: event.data });
         }
     });
     
-    function updateData(message) {
+    function updateData(message: DataUpdateMessage) {
         try {
             log('debug', 'Updating webview data', { moduleName: message.moduleName, selectedCodeLength: message.selectedCode?.length });
             
@@ -151,12 +184,12 @@
             
             log('info', 'Webview data updated successfully', { moduleName });
             
-        } catch (error) {
-            log('error', 'Failed to update webview data', error);
+        } catch (error: any) {
+            log('error', 'Failed to update webview data', { error: error.message });
         }
     }
     
-    function updateDirectory(message) {
+    function updateDirectory(message: DirectoryUpdateMessage) {
         try {
             log('info', 'Updating directory', { 
                 currentPath: message.currentPath, 
@@ -167,7 +200,7 @@
             currentPath = message.currentPath;
             
             // Clear selection when navigating to a new directory
-            selectedPath = '';
+            selectedPath = null;
             
             // Update breadcrumb
             updateBreadcrumb(message.breadcrumb);
@@ -183,35 +216,39 @@
             
             log('info', 'Directory updated successfully', { currentPath, itemCount: (message.directories?.length || 0) + (message.suggestions?.length || 0) });
             
-        } catch (error) {
+        } catch (error: any) {
             log('error', 'Failed to update directory', { error: error.message, stack: error.stack });
         }
     }
     
-    function updateBreadcrumb(breadcrumb) {
-        const breadcrumbEl = document.getElementById('breadcrumb');
+    function updateBreadcrumb(breadcrumb: string[]) {
+        const breadcrumbEl = document.getElementById('breadcrumb')!;
         breadcrumbEl.innerHTML = '';
-        
-        breadcrumb.forEach((item, index) => {
-            // Add clickable item
+
+        const segments = [''].concat(breadcrumb);
+        let pathSoFar = '';
+
+        segments.forEach((item, index) => {
             const itemEl = document.createElement('div');
             itemEl.className = 'breadcrumb-item';
-            
-            // Determine path up to this item
-            const pathUpToItem = breadcrumb.slice(0, index + 1).join('/');
-            
+
+            if (item) {
+                pathSoFar = pathSoFar ? `${pathSoFar}/${item}` : item;
+            } else {
+                pathSoFar = '';
+            }
+
             itemEl.onclick = () => {
                 vscode.postMessage({
                     command: 'selectDirectory',
-                    path: pathUpToItem
+                    path: pathSoFar
                 });
             };
-            
-            itemEl.textContent = item;
+
+            itemEl.textContent = item || 'Workspace Root';
             breadcrumbEl.appendChild(itemEl);
-            
-            // Add separator except for last item
-            if (index < breadcrumb.length - 1) {
+
+            if (index < segments.length - 1) {
                 const separatorEl = document.createElement('div');
                 separatorEl.className = 'breadcrumb-separator';
                 separatorEl.innerHTML = '<i class="codicon codicon-chevron-right"></i>';
@@ -220,7 +257,7 @@
         });
     }
     
-    function updateFileTree(data) {
+    function updateFileTree(data: DirectoryUpdateMessage) {
         try {
             log('debug', 'Updating file tree', { 
                 currentPath: data.currentPath, 
@@ -235,15 +272,14 @@
                 return;
             }
             
-            // Render file tree immediately
             renderFileTree(data);
             
-        } catch (error) {
-            log('error', 'Failed to update file tree', error);
+        } catch (error: any) {
+            log('error', 'Failed to update file tree', { error: error.message });
         }
     }
     
-    function renderFileTree(data) {
+    function renderFileTree(data: DirectoryUpdateMessage) {
         try {
             log('info', 'Rendering file tree', { 
                 currentPath: data.currentPath,
@@ -258,14 +294,12 @@
                 return;
             }
             
-            // Clear existing content (including loading spinner)
             treeContent.innerHTML = '';
             log('debug', 'Cleared tree content');
             
             let itemCount = 0;
             
-            // Add parent directory option if not at root
-            if (data.currentPath !== 'src') {
+            if (data.currentPath) {
                 log('debug', 'Adding parent directory item');
                 const parentItem = createTreeItem({
                     name: '..',
@@ -278,35 +312,31 @@
                 itemCount++;
             }
             
-            // Add create here option
             log('debug', 'Adding "Create module here" item');
+            const friendlyPath = data.currentPath ? `${data.currentPath}/` : 'workspace root';
             const createItem = createTreeItem({
                 name: 'Create module here',
                 path: data.currentPath,
                 icon: 'check',
                 type: 'create',
-                description: `Create ${moduleName}.rs in ${data.currentPath}/`
+                description: `Create ${moduleName}.rs in ${friendlyPath}`
             });
             treeContent.appendChild(createItem);
             itemCount++;
             
-            // Add module files that can be converted
             if (data.moduleFiles && data.moduleFiles.length > 0) {
                 log('debug', 'Adding module files for conversion', { count: data.moduleFiles.length });
                 data.moduleFiles.forEach(file => {
                     const fileItem = createTreeItem({
                         ...file,
                         type: 'module-file',
-                        needsConversion: true,
-                        description: file.description,
-                        detail: file.detail
+                        needsConversion: true
                     });
                     treeContent.appendChild(fileItem);
                     itemCount++;
                 });
             }
             
-            // Add suggested directories
             if (data.suggestions && data.suggestions.length > 0) {
                 log('debug', 'Adding suggested directories', { count: data.suggestions.length });
                 const suggestionsHeader = document.createElement('div');
@@ -321,7 +351,6 @@
                 });
             }
             
-            // Add existing directories
             if (data.directories && data.directories.length > 0) {
                 log('debug', 'Adding existing directories', { count: data.directories.length });
                 const directoriesHeader = document.createElement('div');
@@ -336,46 +365,36 @@
                 });
             }
             
-            // Show empty state if no items (excluding the create and parent items)
-            if (itemCount <= 2 && data.directories.length === 0 && data.suggestions.length === 0) {
-                log('debug', 'No additional items to display, only showing create option');
-            }
-            
             log('info', 'File tree rendered successfully', { itemCount });
             
-        } catch (error) {
+        } catch (error: any) {
             log('error', 'Failed to render file tree', { error: error.message, stack: error.stack });
         }
     }
     
-    function createTreeItem(item) {
+    function createTreeItem(item: TreeItem): HTMLElement {
         try {
             log('debug', 'Creating tree item', { name: item.name, type: item.type, path: item.path });
             
             const itemEl = document.createElement('div');
             itemEl.className = 'tree-item';
             
-            // Add selection state
-            if (item.path === selectedPath) {
+            if (selectedPath !== null && item.path === selectedPath) {
                 itemEl.classList.add('selected');
                 log('debug', 'Tree item is selected', { path: item.path });
             }
             
-            // Create icon
             const iconEl = document.createElement('i');
             iconEl.className = `tree-icon icon-${item.icon} codicon codicon-${item.icon}`;
             
-            // Create info
             const infoEl = document.createElement('div');
             infoEl.className = 'tree-info';
             
-            // Name
             const nameEl = document.createElement('div');
             nameEl.className = 'tree-name';
             nameEl.textContent = item.name;
             infoEl.appendChild(nameEl);
             
-            // Description
             if (item.description) {
                 const descEl = document.createElement('div');
                 descEl.className = 'tree-description';
@@ -383,7 +402,6 @@
                 infoEl.appendChild(descEl);
             }
             
-            // Detail
             if (item.detail) {
                 const detailEl = document.createElement('div');
                 detailEl.className = 'tree-detail';
@@ -394,34 +412,27 @@
             itemEl.appendChild(iconEl);
             itemEl.appendChild(infoEl);
             
-            // Handle click
             itemEl.onclick = () => {
                 try {
                     log('debug', 'Tree item clicked', { name: item.name, type: item.type, path: item.path });
                     
-                    // Handle different types
                     if (item.type === 'parent' || item.type === 'directory' || item.type === 'suggestion') {
                         log('info', 'Navigating to directory', { path: item.path, type: item.type });
-                        // Navigate to directory
                         vscode.postMessage({
                             command: 'selectDirectory',
                             path: item.path
                         });
                     } else if (item.type === 'create' || item.type === 'module-file') {
                         log('info', 'Selecting location for module creation', { path: item.path, needsConversion: item.needsConversion });
-                        // Select this location
                         selectedPath = item.path;
                         
-                        // Update selection UI
                         document.querySelectorAll('.tree-item').forEach(el => {
                             el.classList.remove('selected');
                         });
                         itemEl.classList.add('selected');
                         
-                        // Update button state - enable button
                         updateButtonState();
                         
-                        // Show/hide conversion info
                         const conversionInfo = document.getElementById('conversion-info');
                         if (conversionInfo) {
                             if (item.needsConversion) {
@@ -435,7 +446,7 @@
                             log('warn', 'conversion-info element not found');
                         }
                     }
-                } catch (error) {
+                } catch (error: any) {
                     log('error', 'Error handling tree item click', { error: error.message, stack: error.stack });
                 }
             };
@@ -443,9 +454,8 @@
             log('debug', 'Tree item created successfully', { name: item.name });
             return itemEl;
             
-        } catch (error) {
+        } catch (error: any) {
             log('error', 'Failed to create tree item', { item, error: error.message, stack: error.stack });
-            // Return a basic element as fallback
             const fallbackEl = document.createElement('div');
             fallbackEl.className = 'tree-item';
             fallbackEl.textContent = item.name || 'Unknown Item';
@@ -456,13 +466,13 @@
     function handleConfirm() {
         try {
             log('info', 'User confirmed selection', { selectedPath, moduleName });
-            if (selectedPath) {
+            if (selectedPath !== null) {
                 vscode.postMessage({ command: 'confirmSelection' });
             } else {
                 log('warn', 'Confirm called but no path selected');
             }
-        } catch (error) {
-            log('error', 'Error in handleConfirm', error);
+        } catch (error: any) {
+            log('error', 'Error in handleConfirm', { error: error.message });
         }
     }
     
@@ -470,20 +480,20 @@
         try {
             log('info', 'User cancelled selection', { currentPath, moduleName });
             vscode.postMessage({ command: 'cancel' });
-        } catch (error) {
-            log('error', 'Error in handleCancel', error);
+        } catch (error: any) {
+            log('error', 'Error in handleCancel', { error: error.message });
         }
     }
     
     function updateButtonState() {
         try {
-            const btn = document.getElementById('create-btn');
+            const btn = document.getElementById('create-btn') as HTMLButtonElement;
             if (!btn) {
                 log('error', 'create-btn element not found in updateButtonState');
                 return;
             }
             
-            const hasSelection = selectedPath && selectedPath.length > 0;
+            const hasSelection = selectedPath !== null;
             
             if (hasSelection) {
                 btn.disabled = false;
@@ -494,22 +504,23 @@
                 btn.classList.add('disabled');
                 log('debug', 'Button disabled - no path selected');
             }
-        } catch (error) {
-            log('error', 'Error updating button state', error);
+        } catch (error: any) {
+            log('error', 'Error updating button state', { error: error.message });
         }
     }
     
-    function updateCurrentPathDisplay(path) {
+    function updateCurrentPathDisplay(path: string) {
         try {
             const pathElement = document.querySelector('.current-path');
             if (!pathElement) {
                 log('error', 'current-path element not found');
                 return;
             }
-            pathElement.textContent = `Current: ${path}`;
+            const displayPath = path ? path : 'Workspace Root';
+            pathElement.textContent = `Current: ${displayPath}`;
             log('debug', 'Updated current path display', { path });
-        } catch (error) {
-            log('error', 'Error updating current path display', error);
+        } catch (error: any) {
+            log('error', 'Error updating current path display', { error: error.message });
         }
     }
 })();
