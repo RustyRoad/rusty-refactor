@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { RustCodeAnalyzer } from './analyzer';
-import { SymbolExpander } from './symbolExpander';
 import { 
     getFunctionAtPosition, 
     analyzeLifetimes, 
