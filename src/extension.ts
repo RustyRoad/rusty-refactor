@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { RustCodeAnalyzer } from './analyzer';
-import { ModuleExtractor } from './extractor';
+import { ModuleExtractor, logToOutput } from './extractor';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { FileSearchProvider } from './fileSearchProvider';
 import { ModuleExtractorPanel } from './webview/ModuleExtractorPanel';
@@ -153,87 +153,87 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function handleExtractToModuleWithSearch(extensionUri: vscode.Uri) {
     outputChannel.appendLine('=== Extract to Module with Search ===');
-    outputChannel.appendLine(`[${new Date().toISOString()}] Starting extraction process`);
+    logToOutput('Starting extraction process');
 
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-        outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: No active editor found`);
+        logToOutput('ERROR: No active editor found');
         vscode.window.showErrorMessage('No active editor found');
         return;
     }
 
-    outputChannel.appendLine(`[${new Date().toISOString()}] Active editor found: ${editor.document.fileName}`);
-    outputChannel.appendLine(`[${new Date().toISOString()}] Document language: ${editor.document.languageId}`);
+    logToOutput(`Active editor found: ${editor.document.fileName}`);
+    logToOutput(`Document language: ${editor.document.languageId}`);
 
     if (editor.document.languageId !== 'rust') {
-        outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: Not a Rust file (language: ${editor.document.languageId})`);
+        logToOutput(`ERROR: Not a Rust file (language: ${editor.document.languageId})`);
         vscode.window.showErrorMessage('This command only works with Rust files');
         return;
     }
 
     const selection = editor.selection;
-    outputChannel.appendLine(`[${new Date().toISOString()}] Selection: start=${selection.start.line}:${selection.start.character}, end=${selection.end.line}:${selection.end.character}`);
+    logToOutput(`Selection: start=${selection.start.line}:${selection.start.character}, end=${selection.end.line}:${selection.end.character}`);
 
     if (selection.isEmpty) {
-        outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: No code selected - selection is empty`);
+        logToOutput('ERROR: No code selected - selection is empty');
         vscode.window.showErrorMessage('Please select the code you want to extract');
         return;
     }
 
     const selectedText = editor.document.getText(selection);
-    outputChannel.appendLine(`[${new Date().toISOString()}] Selected ${selectedText.length} characters`);
-    outputChannel.appendLine(`[${new Date().toISOString()}] Selected text preview: ${selectedText.substring(0, 100)}${selectedText.length > 100 ? '...' : ''}`);
+    logToOutput(`Selected ${selectedText.length} characters`);
+    logToOutput(`Selected text preview: ${selectedText.substring(0, 100)}${selectedText.length > 100 ? '...' : ''}`);
 
     try {
         // Analyze the selected code
-        outputChannel.appendLine(`[${new Date().toISOString()}] Starting code analysis...`);
+        logToOutput('Starting code analysis...');
         const analyzer = new RustCodeAnalyzer(editor.document, rustAnalyzerIntegration);
 
-        outputChannel.appendLine(`[${new Date().toISOString()}] Calling analyzer.analyzeSelection()...`);
+        logToOutput('Calling analyzer.analyzeSelection()...');
         const analysisResult = await analyzer.analyzeSelection(selection, selectedText);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Analysis complete - found ${analysisResult.functions.length} functions, ${analysisResult.structs.length} structs, ${analysisResult.enums.length} enums`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Used types: ${Array.from(analysisResult.usedTypes).join(', ')}`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Used traits: ${Array.from(analysisResult.usedTraits).join(', ')}`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Is inside impl block: ${analysisResult.isInsideImpl}`);
+        logToOutput(`Analysis complete - found ${analysisResult.functions.length} functions, ${analysisResult.structs.length} structs, ${analysisResult.enums.length} enums`);
+        logToOutput(`Used types: ${Array.from(analysisResult.usedTypes).join(', ')}`);
+        logToOutput(`Used traits: ${Array.from(analysisResult.usedTraits).join(', ')}`);
+        logToOutput(`Is inside impl block: ${analysisResult.isInsideImpl}`);
 
         // Get module name from user
-        outputChannel.appendLine(`[${new Date().toISOString()}] Prompting user for module name...`);
+        logToOutput('Prompting user for module name...');
         const moduleName = await vscode.window.showInputBox({
             prompt: 'Enter the module name',
             placeHolder: 'my_module',
             validateInput: (value) => {
-                outputChannel.appendLine(`[${new Date().toISOString()}] Validating module name: "${value}"`);
+                logToOutput(`Validating module name: "${value}"`);
                 if (!value) {
                     return 'Module name cannot be empty';
                 }
                 if (!/^[a-z][a-z0-9_]*$/.test(value)) {
-                    outputChannel.appendLine(`[${new Date().toISOString()}] Module name validation failed: "${value}" doesn't match pattern`);
+                    logToOutput(`Module name validation failed: "${value}" doesn't match pattern`);
                     return 'Module name must be lowercase with underscores (snake_case)';
                 }
-                outputChannel.appendLine(`[${new Date().toISOString()}] Module name validation passed: "${value}"`);
+                logToOutput(`Module name validation passed: "${value}"`);
                 return null;
             }
         });
 
         if (!moduleName) {
-            outputChannel.appendLine(`[${new Date().toISOString()}] User cancelled module name input`);
+            logToOutput('User cancelled module name input');
             return; // User cancelled
         }
-        outputChannel.appendLine(`[${new Date().toISOString()}] Module name confirmed: ${moduleName}`);
+        logToOutput(`Module name confirmed: ${moduleName}`);
 
         // Get workspace root
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
-            outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: No workspace folder found`);
+            logToOutput('ERROR: No workspace folder found');
             vscode.window.showErrorMessage('No workspace folder found');
             return;
         }
-        outputChannel.appendLine(`[${new Date().toISOString()}] Workspace folder: ${workspaceFolder.uri.fsPath}`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Extension URI: ${extensionUri.fsPath}`);
+        logToOutput(`Workspace folder: ${workspaceFolder.uri.fsPath}`);
+        logToOutput(`Extension URI: ${extensionUri.fsPath}`);
 
         // Show webview panel to select destination
-        outputChannel.appendLine(`[${new Date().toISOString()}] Opening webview panel for path selection...`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Calling ModuleExtractorPanel.show() with params: moduleName="${moduleName}", selectedText.length=${selectedText.length}`);
+        logToOutput('Opening webview panel for path selection...');
+        logToOutput(`Calling ModuleExtractorPanel.show() with params: moduleName="${moduleName}", selectedText.length=${selectedText.length}`);
 
         const selectedPath = await ModuleExtractorPanel.show(
             moduleName,
@@ -244,13 +244,13 @@ async function handleExtractToModuleWithSearch(extensionUri: vscode.Uri) {
         );
 
         if (!selectedPath) {
-            outputChannel.appendLine(`[${new Date().toISOString()}] User cancelled path selection or no path returned`);
+            logToOutput('User cancelled path selection or no path returned');
             return; // User cancelled
         }
-        outputChannel.appendLine(`[${new Date().toISOString()}] Path selected: ${selectedPath}`);
+        logToOutput(`Path selected: ${selectedPath}`);
 
         // Extract the module
-        outputChannel.appendLine(`[${new Date().toISOString()}] Creating ModuleExtractor instance...`);
+        logToOutput('Creating ModuleExtractor instance...');
         const extractor = new ModuleExtractor(
             editor.document,
             analysisResult,
@@ -260,25 +260,25 @@ async function handleExtractToModuleWithSearch(extensionUri: vscode.Uri) {
             selection // Pass original selection for accurate replacement
         );
 
-        outputChannel.appendLine(`[${new Date().toISOString()}] Starting module extraction process...`);
+        logToOutput('Starting module extraction process...');
         await extractor.extract();
-        outputChannel.appendLine(`[${new Date().toISOString()}] Module extraction completed successfully!`);
+        logToOutput('Module extraction completed successfully!');
 
         vscode.window.showInformationMessage(
             `Successfully extracted code to module '${moduleName}' at ${selectedPath}`
         );
-        outputChannel.appendLine(`[${new Date().toISOString()}] Success message shown to user`);
+        logToOutput('Success message shown to user');
 
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: ${errorMessage}`);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Error type: ${typeof error}`);
+        logToOutput(`ERROR: ${errorMessage}`);
+        logToOutput(`Error type: ${typeof error}`);
         if (error instanceof Error && error.stack) {
-            outputChannel.appendLine(`[${new Date().toISOString()}] Stack trace: ${error.stack}`);
+            logToOutput(`Stack trace: ${error.stack}`);
         }
         vscode.window.showErrorMessage(`Failed to extract module: ${errorMessage}`);
         console.error('Extract to module error:', error);
-        outputChannel.appendLine(`[${new Date().toISOString()}] Extraction process failed`);
+        logToOutput('Extraction process failed');
     }
 }
 
