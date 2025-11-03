@@ -1,4 +1,5 @@
-import './styles.css'; // @ts-ignore
+// @ts-ignore
+import './styles.css';
 
 
 interface VSCodeAPI {
