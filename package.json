@@ -53,7 +53,7 @@
       {
         "name": "rustyRefactor_extract_to_module",
         "displayName": "Extract Rust Code to Module",
-        "modelDescription": "Extracts selected Rust code from a source file and creates a new module file with:\n- Intelligent import handling\n- Impl block preservation\n- Automatic parent module registration\n- rust-analyzer validation\n\nThis tool enforces Rust conventions and ensures only clean, compiling code is delivered.\n\nCRITICAL REQUIREMENTS:\n1) modulePath must be RELATIVE to workspace root, starting with 'src/'.\n   - DO NOT include workspace root path.\n   - Example (CORRECT): 'src/controllers/ads/facebook/facebook_ads.rs'\n   - Example (WRONG): '/home/user/project/src/...'\n   - The 'src/' folder ALREADY EXISTS; do not try to create it.\n2) Module structure must follow 'one module per folder'.\n   - Each module file must be in its own folder with a mod.rs.\n   - Example: 'src/controllers/ads/facebook/' contains both 'mod.rs' AND 'facebook_ads.rs'.\n   - Flat structures like 'src/controllers/ads/facebook_ads.rs' are REJECTED with error.\n3) moduleName must be snake_case (lowercase_with_underscores).\n\nThe tool automatically:\n- Validates extracted code compiles with rust-analyzer (3 auto-fix attempts)\n- Creates missing folders and mod.rs files\n- Removes extracted code from source (no comments)\n- Normalizes paths using built-in Utils.extractWorkspaceRoot()\n- Applies all changes atomically using WorkspaceEdit API\n\nReturns structured JSON with success status, extracted items, and import statements.\nTool will ABORT if validation fails after auto-fix attempts."
+        "modelDescription": "Extracts selected Rust code from a source file and creates a new module file with:\n- Intelligent import handling\n- Impl block preservation\n- Automatic parent module registration\n- rust-analyzer validation\n\nThis tool enforces Rust conventions and ensures only clean, compiling code is delivered.\n\nCRITICAL REQUIREMENTS:\n1) modulePath must be RELATIVE to workspace root, starting with 'src/'.\n   - DO NOT include workspace root path.\n   - Example (CORRECT): 'src/controllers/ads/facebook/facebook_ads.rs'\n   - Example (WRONG): '/home/user/project/src/...'\n   - The 'src/' folder ALREADY EXISTS; do not try to create it.\n2) Module structure must follow 'one module per folder'.\n   - Each module file must be in its own folder with a mod.rs.\n   - Example: 'src/controllers/ads/facebook/' contains both 'mod.rs' AND 'facebook_ads.rs'.\n   - Flat structures like 'src/controllers/ads/facebook_ads.rs' are REJECTED with error.\n3) moduleName must be snake_case (lowercase_with_underscores).\n\nThe tool automatically:\n- Validates extracted code compiles with rust-analyzer (3 auto-fix attempts)\n- Creates missing folders and mod.rs files\n- Removes extracted code from source (no comments)\n- Normalizes paths using built-in Utils.extractWorkspaceRoot()\n- Applies all changes atomically using WorkspaceEdit API\n\nReturns structured JSON with success status, extracted items, and import statements.\nTool will ABORT if validation fails after auto-fix attempts.",
         "icon": "$(symbol-namespace)",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "extract_rust_module",
@@ -228,6 +228,16 @@
           "type": "boolean",
           "default": true,
           "description": "Integrate with rust-analyzer for better type detection and unused import cleanup"
+        },
+        "rustyRefactor.rustAnalyzerValidationTimeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Maximum time (ms) to wait for rust-analyzer diagnostics to appear while validating extracted modules. Increase for slower systems."
+        },
+        "rustyRefactor.rustAnalyzerValidationPollIntervalMs": {
+          "type": "number",
+          "default": 200,
+          "description": "Polling interval (ms) used when waiting for rust-analyzer diagnostics to change. Lower for faster detection, higher to reduce resource usage."
         },
         "rustyRefactor.aiAutoDocumentation": {
           "type": "boolean",

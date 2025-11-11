@@ -941,9 +941,10 @@ export class ModuleExtractor {
                 // Open the document to trigger rust-analyzer
                 const doc = await vscode.workspace.openTextDocument(uri);
                 
-                // Wait for rust-analyzer to process the file
+                // Wait for rust-analyzer to process the file, using a smarter
+                // diagnostics-based wait which is configurable via settings.
                 logToOutput('Waiting for rust-analyzer to process new module...');
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                await this.waitForDiagnosticsToSettle(uri);
 
                 // Get diagnostics from rust-analyzer
                 const diagnostics = vscode.languages.getDiagnostics(uri);
@@ -966,9 +967,12 @@ export class ModuleExtractor {
                 // If this is the last attempt, fail
                 if (attempt >= maxRetries) {
                     await vscode.window.showTextDocument(doc);
+                    const firstError = errors.length > 0 
+                        ? `First error: ${errors[0].message} at line ${errors[0].range.start.line + 1}. `
+                        : '';
                     throw new Error(
                         `Extracted module has ${errors.length} compilation error(s) after ${maxRetries} attempts. ` +
-                        `First error: ${errors[0].message} at line ${errors[0].range.start.line + 1}. ` +
+                        `${firstError}` +
                         `The extraction has been aborted. Please check the output panel for details.`
                     );
                 }
@@ -1048,6 +1052,8 @@ export class ModuleExtractor {
                 }
 
                 // Small delay between fixes
+                // Keep a small UI-friendly delay between fixes; this is fine to
+                // keep short and local, and it's not about rust-analyzer readiness.
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
 
@@ -1100,7 +1106,12 @@ export class ModuleExtractor {
 
         try {
             const doc = await vscode.workspace.openTextDocument(uri);
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Wait for diagnostics to populate and stabilize before checking
+            // for unused imports (this helps avoid flakiness on slow systems).
+            const config = vscode.workspace.getConfiguration('rustyRefactor');
+            const timeoutMs = config.get<number>('rustAnalyzerValidationTimeoutMs', 5000);
+            const pollMs = config.get<number>('rustAnalyzerValidationPollIntervalMs', 200);
+            await this.waitForDiagnosticsToSettle(uri, timeoutMs, pollMs);
 
             const diagnostics = vscode.languages.getDiagnostics(uri);
             const unusedImportDiagnostics = diagnostics.filter(d =>
@@ -1152,5 +1163,84 @@ export class ModuleExtractor {
             return relativePath.replace(/\\/g, '/');
         }
         return filePath.replace(/\\/g, '/');
+    }
+
+    /**
+     * Small utility to produce a compact fingerprint of diagnostics so we can
+     * detect changes. We only use message, range, severity, and source to
+     * avoid serializing many extra fields.
+     */
+    private getDiagnosticsFingerprint(diagnostics: vscode.Diagnostic[]): string {
+        try {
+            return diagnostics
+                .map(d => `${d.severity}-${d.source}-${d.range.start.line}:${d.range.start.character}-${d.message}`)
+                .sort()
+                .join('|');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /**
+     * Wait for diagnostics to stabilize for a specific URI. This uses the
+     * languages.onDidChangeDiagnostics event and a poll fallback. The timeout
+     * and poll interval are configurable from extension settings.
+     */
+    private async waitForDiagnosticsToSettle(
+        uri: vscode.Uri,
+        timeoutMs?: number,
+        pollIntervalMs?: number
+    ): Promise<void> {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+        const timeout = timeoutMs ?? config.get<number>('rustAnalyzerValidationTimeoutMs', 5000);
+        const pollMs = pollIntervalMs ?? config.get<number>('rustAnalyzerValidationPollIntervalMs', 200);
+
+        const start = Date.now();
+        const initial = vscode.languages.getDiagnostics(uri) || [];
+        let initialFingerprint = this.getDiagnosticsFingerprint(initial);
+
+        return new Promise<void>((resolve) => {
+            let disposed = false;
+
+            const tryResolveIfChanged = () => {
+                const current = vscode.languages.getDiagnostics(uri) || [];
+                const fingerprint = this.getDiagnosticsFingerprint(current);
+                if (fingerprint !== initialFingerprint) {
+                    initialFingerprint = fingerprint; // update for subsequent waits
+                    if (!disposed) {
+                        disposed = true;
+                        resolve();
+                    }
+                }
+            };
+
+            const diagnosticsListener = vscode.languages.onDidChangeDiagnostics((e) => {
+                if (e.uris.some(u => u.toString() === uri.toString())) {
+                    tryResolveIfChanged();
+                }
+            });
+
+            const intervalTimer = setInterval(() => {
+                tryResolveIfChanged();
+                if (Date.now() - start > timeout) {
+                    if (!disposed) {
+                        disposed = true;
+                        clearInterval(intervalTimer);
+                        diagnosticsListener.dispose();
+                        resolve();
+                    }
+                }
+            }, pollMs);
+
+            // Also add a final timeout to avoid leaking timers/listeners.
+            setTimeout(() => {
+                if (!disposed) {
+                    disposed = true;
+                    clearInterval(intervalTimer);
+                    diagnosticsListener.dispose();
+                    resolve();
+                }
+            }, timeout);
+        });
     }
 }
