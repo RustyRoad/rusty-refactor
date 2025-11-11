@@ -146,7 +146,7 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
                     `**Correct Pattern**:\n` +
                     `\`\`\`\n${grandParentDir}/${parentDir}/${moduleName}/\n` +
                     `  ├── mod.rs              (auto-created with re-exports)\n` +
-                    `  └── ${fileName}         (your implementation)\n\`\`\`\n\n` +
+                    `  └── ${fileName}   (your implementation)\n\`\`\`\n\n` +
                     `**Fix**: Use this path instead:\n` +
                     `  "${pathParts.slice(0, -1).join('/')}/${moduleName}/${fileName}"\n\n` +
                     `**Example**: Instead of "src/controllers/ads/facebook_ads.rs", use:\n` +
