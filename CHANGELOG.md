@@ -4,7 +4,7 @@ All notable changes to the "Rusty Refactor" extension will be documented in this
 
 ## [Unreleased]
 
-## [0.4.42] - 2025-11-03
+## [0.5.00] - 2025-11-03
 
 ### Fixed
 - LLM tools now properly utilize existing TypeScript utilities instead of Rust FFI
