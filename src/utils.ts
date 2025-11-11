@@ -141,6 +141,31 @@ export class Utils {
     }
 
     /**
+     * Extract workspace root from a path if it exists at the beginning
+     * Returns the path relative to workspace root or original path if not in workspace
+     */
+    static extractWorkspaceRoot(path: string): string {
+        const workspaceRoot = Utils.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            return path;
+        }
+
+        // Normalize both paths to use forward slashes for comparison
+        const normalizedPath = path.replace(/\\/g, '/');
+        const normalizedRoot = workspaceRoot.replace(/\\/g, '/');
+
+        // If path starts with workspace root, remove it
+        if (normalizedPath.startsWith(normalizedRoot)) {
+            let relativePath = normalizedPath.substring(normalizedRoot.length);
+            // Remove leading slash
+            relativePath = relativePath.replace(/^[\/\\]+/, '');
+            return relativePath;
+        }
+
+        return path;
+    }
+
+    /**
      * Check if rust-analyzer is available
      */
     static isRustAnalyzerAvailable(): boolean {

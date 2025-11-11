@@ -4,6 +4,7 @@ import { RustCodeAnalyzer } from './analyzer';
 import { logToOutput, ModuleExtractor } from './extractor';
 import { IExtractToModuleParameters } from './IExtractToModuleParameters';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
+import { Utils } from './utils';
 
 /**
  * Language model tool for extracting Rust code to a new module.
@@ -86,6 +87,161 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             break;
         }
         return line + 1;
+    }
+
+    /**
+     * Validates that the module path follows Rust and RustyRoad conventions:
+     * - Modules should be organized as: parent_folder/module_folder/implementation.rs
+     * - Each module folder should have a mod.rs that re-exports
+     * - Example: src/controllers/ads/facebook/facebook_ads.rs
+     *           with src/controllers/ads/facebook/mod.rs
+     */
+    private validateModulePath(modulePath: string, moduleName: string): void {
+        const normalizedPath = modulePath.replace(/\\/g, '/');
+        const pathParts = normalizedPath.split('/');
+        const fileName = path.basename(normalizedPath);
+        
+        // Must end with .rs
+        if (!fileName.endsWith('.rs')) {
+            throw new Error(
+                `Invalid module path: "${modulePath}"\n\n` +
+                `**Error**: Path must end with .rs extension.\n\n` +
+                `**Fix**: Add .rs extension to the file name.`
+            );
+        }
+        
+        const fileNameWithoutExt = fileName.replace('.rs', '');
+        const parentDir = pathParts[pathParts.length - 2]; // The folder containing this file
+        
+        // Special case: if this is mod.rs, it's valid
+        if (fileName === 'mod.rs') {
+            return; // mod.rs is always valid
+        }
+        
+        // Check if this is a flat structure (e.g., src/controllers/ads/facebook_ads.rs)
+        // This violates the "one module per folder" rule
+        if (pathParts.length >= 3 && parentDir !== 'src') {
+            const grandParentDir = pathParts[pathParts.length - 3];
+            
+            // Check if the file is in its own dedicated folder
+            // We allow some flexibility: folder can be named after module or a simplified version
+            const possibleFolderNames = [
+                moduleName,
+                fileNameWithoutExt,
+                // Handle common suffixes
+                fileNameWithoutExt.replace(/_controller$/, ''),
+                fileNameWithoutExt.replace(/_service$/, ''),
+                fileNameWithoutExt.replace(/_model$/, ''),
+                fileNameWithoutExt.replace(/_repository$/, ''),
+            ];
+            
+            const isInOwnFolder = possibleFolderNames.includes(parentDir);
+            
+            if (!isInOwnFolder) {
+                throw new Error(
+                    `Invalid module path: "${modulePath}"\n\n` +
+                    `**Rust Convention Violation**: Module file must be in its own folder.\n\n` +
+                    `You're trying to create "${fileName}" directly in "${parentDir}/", ` +
+                    `but it should be in a dedicated folder.\n\n` +
+                    `**Correct Pattern**:\n` +
+                    `\`\`\`\n${grandParentDir}/${parentDir}/${moduleName}/\n` +
+                    `  ├── mod.rs              (auto-created with re-exports)\n` +
+                    `  └── ${fileName}         (your implementation)\n\`\`\`\n\n` +
+                    `**Fix**: Use this path instead:\n` +
+                    `  "${pathParts.slice(0, -1).join('/')}/${moduleName}/${fileName}"\n\n` +
+                    `**Example**: Instead of "src/controllers/ads/facebook_ads.rs", use:\n` +
+                    `  "src/controllers/ads/facebook/facebook_ads.rs"\n` +
+                    `  (mod.rs will be auto-created)`
+                );
+            }
+        }
+    }
+
+    /**
+     * Ensures the module folder exists and creates mod.rs if needed.
+     * Works with rust-analyzer to register the module properly.
+     */
+    private async ensureModuleFolderStructure(
+        modulePath: string,
+        moduleName: string
+    ): Promise<void> {
+        const normalizedPath = modulePath.replace(/\\/g, '/');
+        const fileName = path.basename(normalizedPath);
+        
+        // Skip if this is already a mod.rs file
+        if (fileName === 'mod.rs') {
+            return;
+        }
+        
+        const moduleDir = path.dirname(modulePath);
+        const modRsPath = path.join(moduleDir, 'mod.rs');
+        
+        // Check if mod.rs exists
+        const modRsUri = vscode.Uri.file(modRsPath);
+        let modRsExists = false;
+        try {
+            await vscode.workspace.fs.stat(modRsUri);
+            modRsExists = true;
+        } catch {
+            modRsExists = false;
+        }
+        
+        const fileNameWithoutExt = fileName.replace('.rs', '');
+        
+        if (!modRsExists) {
+            // Create mod.rs with proper re-exports
+            const modRsContent = [
+                `//! ${path.basename(moduleDir)} module`,
+                `//!`,
+                `//! Auto-generated by Rusty Refactor`,
+                ``,
+                `pub mod ${fileNameWithoutExt};`,
+                `pub use ${fileNameWithoutExt}::*;`,
+                ``
+            ].join('\n');
+            
+            await vscode.workspace.fs.writeFile(modRsUri, Buffer.from(modRsContent, 'utf8'));
+            logToOutput(`[ExtractToModuleTool] Created mod.rs: ${modRsPath}`);
+            logToOutput(`[ExtractToModuleTool] Re-exported: ${fileNameWithoutExt}`);
+        } else {
+            // mod.rs exists, check if it already exports this module
+            const modRsDoc = await vscode.workspace.openTextDocument(modRsUri);
+            const modRsText = modRsDoc.getText();
+            
+            const hasModDeclaration = modRsText.includes(`pub mod ${fileNameWithoutExt};`);
+            const hasReExport = modRsText.includes(`pub use ${fileNameWithoutExt}::*;`);
+            
+            if (!hasModDeclaration || !hasReExport) {
+                // Append the module declaration and re-export
+                const edit = new vscode.WorkspaceEdit();
+                const lastLine = modRsDoc.lineAt(modRsDoc.lineCount - 1);
+                const insertPos = lastLine.range.end;
+                
+                let textToAdd = '';
+                if (!hasModDeclaration) {
+                    textToAdd += `\npub mod ${fileNameWithoutExt};`;
+                }
+                if (!hasReExport) {
+                    textToAdd += `\npub use ${fileNameWithoutExt}::*;`;
+                }
+                
+                edit.insert(modRsUri, insertPos, textToAdd);
+                await vscode.workspace.applyEdit(edit);
+                await modRsDoc.save();
+                
+                logToOutput(`[ExtractToModuleTool] Updated mod.rs with: ${fileNameWithoutExt}`);
+            } else {
+                logToOutput(`[ExtractToModuleTool] mod.rs already exports: ${fileNameWithoutExt}`);
+            }
+        }
+        
+        // Trigger rust-analyzer to recognize the new module structure
+        try {
+            await vscode.commands.executeCommand('rust-analyzer.reloadWorkspace');
+            logToOutput(`[ExtractToModuleTool] Triggered rust-analyzer reload`);
+        } catch (err) {
+            logToOutput(`[ExtractToModuleTool] Warning: Could not trigger rust-analyzer reload: ${err}`);
+        }
     }
 
     async prepareInvocation(
@@ -201,10 +357,25 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             const defaultPath = config.get<string>('defaultModulePath', 'src');
             let modulePath = params.modulePath || `${defaultPath}/${params.moduleName}.rs`;
 
+            // Normalize the module path to be relative to workspace
+            // This handles both absolute paths and paths with duplicate workspace roots
+            modulePath = Utils.extractWorkspaceRoot(modulePath);
+            
+            // Normalize path separators to forward slashes
+            modulePath = modulePath.replace(/\\/g, '/');
+
             // Ensure the module path ends with .rs
             if (!modulePath.endsWith('.rs')) {
                 modulePath = `${modulePath}.rs`;
             }
+
+            logToOutput(`[ExtractToModuleTool] Normalized module path: ${modulePath}`);
+
+            // Validate module path follows "one module per folder" convention
+            this.validateModulePath(modulePath, params.moduleName);
+
+            // Ensure folder structure exists and create mod.rs if needed
+            await this.ensureModuleFolderStructure(modulePath, params.moduleName);
 
             // Extract the module
             const extractor = new ModuleExtractor(

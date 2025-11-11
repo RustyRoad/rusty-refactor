@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { logToOutput } from './extractor';
 
 // Type definitions for our native module
 interface EnhancedOutput {
@@ -97,19 +98,26 @@ interface CacheStatsResult {
 
 // Native loader that attempts to find the compiled addon
 function tryRequire(paths: string[]): any {
+  logToOutput(`[NativeBridge] __dirname is: ${__dirname}`);
+  logToOutput(`[NativeBridge] Attempting to load native module from ${paths.length} candidates`);
+  
   for (const p of paths) {
-    try {
-      console.log(`Trying to load native module from: ${p}`);
-      if (fs.existsSync(p)) {
+    const exists = fs.existsSync(p);
+    logToOutput(`[NativeBridge] Checking: ${p} - exists: ${exists}`);
+    
+    if (exists) {
+      try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const mod = require(/* webpackIgnore: true */ p);
-        console.log(`Successfully loaded native module from: ${p}`);
+        logToOutput(`[NativeBridge] ✓ Successfully loaded native module from: ${p}`);
         return mod;
+      } catch (e) {
+        console.error(`[NativeBridge] ✗ Failed to load from ${p}:`, e);
       }
-    } catch (e) {
-      console.warn(`Failed to load from ${p}:`, e);
     }
   }
+  
+  console.error(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
   throw new Error('Native addon not found. Build the napi bridge first (npm run build:napi)');
 }
 
@@ -122,7 +130,7 @@ const candidates = [
   
   // Custom build locations
   path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker.node'),
-  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker.dll'),
+  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker_lib.dll'),
   path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'librusty_refactor_worker.so'),
   path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'librusty_refactor_worker.dylib'),
   path.join(__dirname, '..', 'rust-backend', 'index.node'),
