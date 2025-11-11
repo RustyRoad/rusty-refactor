@@ -6,7 +6,7 @@ Fix LLM tool integration to use TypeScript utilities instead of Rust FFI
 - Updated all tools to use Utils.toSnakeCase() instead of custom implementation
 - Improved tool documentation to emphasize use of existing TypeScript utilities
 - Updated CHANGELOG and README.md to reflect TypeScript utilities integration
-- Version bump to 0.4.42
+- Version bump to 0.5.00
 
 This ensures that LLM tools properly utilize the existing TypeScript utilities
 instead of trying to access Rust FFI functions directly, making the integration
