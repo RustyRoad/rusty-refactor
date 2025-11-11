@@ -100,6 +100,13 @@ export class ModuleExtractor {
             await this.createModuleFile(moduleContent);
             logToOutput('Module file created successfully');
 
+            // Validate the extracted code compiles with rust-analyzer
+            if (this.rustAnalyzer && config.get<boolean>('integrationWithRustAnalyzer', true)) {
+                logToOutput('Validating extracted module with rust-analyzer...');
+                await this.validateExtractedModule();
+                logToOutput('Module validation passed');
+            }
+
             // Find and update parent module
             logToOutput('Updating parent module...');
             await this.updateParentModule();
@@ -897,22 +904,176 @@ export class ModuleExtractor {
         // Use the stored original selection, not the current editor selection
         // This ensures we replace the correct code even if multiple extractions happened
         const rangeToReplace = this.originalSelection;
-        let comment: string;
 
-        if (useAISummary) {
-            // Generate AI-powered summary with normalized path
-            comment = await this.aiDocGenerator.generateExtractionSummary(
-                this.analysis.selectedCode,
-                this.moduleName,
-                this.normalizePath(this.modulePath)
-            );
-        } else {
-            comment = `// Code extracted to ${this.normalizePath(this.modulePath)}\n// Available as: ${this.moduleName}::*`;
+        // Simply delete the extracted code - don't leave comments
+        // The module system and imports make it clear where the code went
+        const comment = ''; // Empty string = delete the selection
+
+        // Use WorkspaceEdit API for atomic, validated changes
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(editor.document.uri, rangeToReplace, comment);
+        
+        // Apply the edit - this validates before applying
+        const success = await vscode.workspace.applyEdit(edit);
+        if (!success) {
+            throw new Error('Failed to replace original code - edit was rejected by VS Code');
+        }
+        
+        logToOutput('Original code removed from source file');
+    }
+
+    private async validateExtractedModule(): Promise<void> {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            throw new Error('No workspace folder found for validation');
         }
 
-        await editor.edit(editBuilder => {
-            editBuilder.replace(rangeToReplace, comment);
-        });
+        const fullPath = path.join(workspaceFolder.uri.fsPath, this.modulePath);
+        const uri = vscode.Uri.file(fullPath);
+        const maxRetries = 3;
+        let attempt = 0;
+
+        while (attempt < maxRetries) {
+            attempt++;
+            logToOutput(`Validation attempt ${attempt}/${maxRetries}`);
+
+            try {
+                // Open the document to trigger rust-analyzer
+                const doc = await vscode.workspace.openTextDocument(uri);
+                
+                // Wait for rust-analyzer to process the file, using a smarter
+                // diagnostics-based wait which is configurable via settings.
+                logToOutput('Waiting for rust-analyzer to process new module...');
+                await this.waitForDiagnosticsToSettle(uri);
+
+                // Get diagnostics from rust-analyzer
+                const diagnostics = vscode.languages.getDiagnostics(uri);
+                const errors = diagnostics.filter(d => 
+                    d.severity === vscode.DiagnosticSeverity.Error &&
+                    d.source === 'rust-analyzer'
+                );
+
+                if (errors.length === 0) {
+                    logToOutput('Module validation successful - no compilation errors');
+                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+                    return; // Success!
+                }
+
+                logToOutput(`Validation found ${errors.length} compilation error(s)`);
+                errors.forEach((err, index) => {
+                    logToOutput(`Error ${index + 1}: ${err.message} at line ${err.range.start.line + 1}`);
+                });
+
+                // If this is the last attempt, fail
+                if (attempt >= maxRetries) {
+                    await vscode.window.showTextDocument(doc);
+                    const firstError = errors.length > 0 
+                        ? `First error: ${errors[0].message} at line ${errors[0].range.start.line + 1}. `
+                        : '';
+                    throw new Error(
+                        `Extracted module has ${errors.length} compilation error(s) after ${maxRetries} attempts. ` +
+                        `${firstError}` +
+                        `The extraction has been aborted. Please check the output panel for details.`
+                    );
+                }
+
+                // Try to auto-fix with Copilot
+                logToOutput(`Attempting auto-fix with Copilot (attempt ${attempt}/${maxRetries})...`);
+                const fixed = await this.attemptAutoFixWithCopilot(doc, errors);
+                
+                if (!fixed) {
+                    logToOutput('Auto-fix failed, aborting validation');
+                    await vscode.window.showTextDocument(doc);
+                    throw new Error(
+                        `Could not auto-fix compilation errors. ` +
+                        `Extraction aborted. Please check the file at ${this.modulePath}`
+                    );
+                }
+
+                logToOutput('Auto-fix applied, re-validating...');
+                // Loop will retry validation
+
+            } catch (error) {
+                if (error instanceof Error && error.message.includes('compilation error')) {
+                    throw error; // Re-throw validation errors
+                }
+                logToOutput(`Validation check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                throw error;
+            }
+        }
+    }
+
+    private async attemptAutoFixWithCopilot(
+        doc: vscode.TextDocument,
+        errors: vscode.Diagnostic[]
+    ): Promise<boolean> {
+        try {
+            // Show the document for code actions
+            await vscode.window.showTextDocument(doc);
+
+            let fixesApplied = 0;
+
+            // Try to apply quick fixes for each error
+            for (const error of errors) {
+                logToOutput(`Attempting to fix: ${error.message}`);
+
+                // Get code actions for this diagnostic
+                const codeActions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+                    'vscode.executeCodeActionProvider',
+                    doc.uri,
+                    error.range
+                );
+
+                if (!codeActions || codeActions.length === 0) {
+                    logToOutput(`No code actions available for: ${error.message}`);
+                    continue;
+                }
+
+                // Look for rust-analyzer quick fixes
+                const quickFix = codeActions.find(action => 
+                    action.kind?.value.startsWith('quickfix') &&
+                    (action.title.includes('Import') || 
+                     action.title.includes('Add') ||
+                     action.title.includes('Insert') ||
+                     action.title.includes('Fix'))
+                );
+
+                if (quickFix && quickFix.edit) {
+                    logToOutput(`Applying quick fix: ${quickFix.title}`);
+                    const success = await vscode.workspace.applyEdit(quickFix.edit);
+                    if (success) {
+                        fixesApplied++;
+                        logToOutput(`✓ Applied: ${quickFix.title}`);
+                    } else {
+                        logToOutput(`✗ Failed to apply: ${quickFix.title}`);
+                    }
+                } else {
+                    logToOutput(`No suitable quick fix found for: ${error.message}`);
+                }
+
+                // Small delay between fixes
+                // Keep a small UI-friendly delay between fixes; this is fine to
+                // keep short and local, and it's not about rust-analyzer readiness.
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            if (fixesApplied > 0) {
+                logToOutput(`Applied ${fixesApplied} auto-fix(es)`);
+                
+                // Save the document
+                await doc.save();
+                logToOutput('Document saved after auto-fixes');
+                
+                return true;
+            }
+
+            logToOutput('No fixes could be applied automatically');
+            return false;
+
+        } catch (error) {
+            logToOutput(`Auto-fix error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return false;
+        }
     }
 
     private async formatFiles(): Promise<void> {
@@ -945,7 +1106,12 @@ export class ModuleExtractor {
 
         try {
             const doc = await vscode.workspace.openTextDocument(uri);
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Wait for diagnostics to populate and stabilize before checking
+            // for unused imports (this helps avoid flakiness on slow systems).
+            const config = vscode.workspace.getConfiguration('rustyRefactor');
+            const timeoutMs = config.get<number>('rustAnalyzerValidationTimeoutMs', 5000);
+            const pollMs = config.get<number>('rustAnalyzerValidationPollIntervalMs', 200);
+            await this.waitForDiagnosticsToSettle(uri, timeoutMs, pollMs);
 
             const diagnostics = vscode.languages.getDiagnostics(uri);
             const unusedImportDiagnostics = diagnostics.filter(d =>
@@ -997,5 +1163,84 @@ export class ModuleExtractor {
             return relativePath.replace(/\\/g, '/');
         }
         return filePath.replace(/\\/g, '/');
+    }
+
+    /**
+     * Small utility to produce a compact fingerprint of diagnostics so we can
+     * detect changes. We only use message, range, severity, and source to
+     * avoid serializing many extra fields.
+     */
+    private getDiagnosticsFingerprint(diagnostics: vscode.Diagnostic[]): string {
+        try {
+            return diagnostics
+                .map(d => `${d.severity}-${d.source}-${d.range.start.line}:${d.range.start.character}-${d.message}`)
+                .sort()
+                .join('|');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /**
+     * Wait for diagnostics to stabilize for a specific URI. This uses the
+     * languages.onDidChangeDiagnostics event and a poll fallback. The timeout
+     * and poll interval are configurable from extension settings.
+     */
+    private async waitForDiagnosticsToSettle(
+        uri: vscode.Uri,
+        timeoutMs?: number,
+        pollIntervalMs?: number
+    ): Promise<void> {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+        const timeout = timeoutMs ?? config.get<number>('rustAnalyzerValidationTimeoutMs', 5000);
+        const pollMs = pollIntervalMs ?? config.get<number>('rustAnalyzerValidationPollIntervalMs', 200);
+
+        const start = Date.now();
+        const initial = vscode.languages.getDiagnostics(uri) || [];
+        let initialFingerprint = this.getDiagnosticsFingerprint(initial);
+
+        return new Promise<void>((resolve) => {
+            let disposed = false;
+
+            const tryResolveIfChanged = () => {
+                const current = vscode.languages.getDiagnostics(uri) || [];
+                const fingerprint = this.getDiagnosticsFingerprint(current);
+                if (fingerprint !== initialFingerprint) {
+                    initialFingerprint = fingerprint; // update for subsequent waits
+                    if (!disposed) {
+                        disposed = true;
+                        resolve();
+                    }
+                }
+            };
+
+            const diagnosticsListener = vscode.languages.onDidChangeDiagnostics((e) => {
+                if (e.uris.some(u => u.toString() === uri.toString())) {
+                    tryResolveIfChanged();
+                }
+            });
+
+            const intervalTimer = setInterval(() => {
+                tryResolveIfChanged();
+                if (Date.now() - start > timeout) {
+                    if (!disposed) {
+                        disposed = true;
+                        clearInterval(intervalTimer);
+                        diagnosticsListener.dispose();
+                        resolve();
+                    }
+                }
+            }, pollMs);
+
+            // Also add a final timeout to avoid leaking timers/listeners.
+            setTimeout(() => {
+                if (!disposed) {
+                    disposed = true;
+                    clearInterval(intervalTimer);
+                    diagnosticsListener.dispose();
+                    resolve();
+                }
+            }, timeout);
+        });
     }
 }

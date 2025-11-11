@@ -13,6 +13,11 @@ A powerful VSCode extension for extracting Rust code into modules with intellige
   - Success/failure indicators, recommended actions, extracted items
   - Actionable error messages with specific fixes
   - Complete import statements and usage examples
+- **TypeScript Utilities Integration**: Tools leverage existing TypeScript utilities for:
+  - Path normalization (`Utils.extractWorkspaceRoot()`)
+  - String manipulation (`Utils.toSnakeCase()`)
+  - Workspace detection (`Utils.getWorkspaceRoot()`)
+  - No need to use Rust FFI for common operations
 - **Intelligent Import Suggestions**: Name resolution engine with confidence scores
   - 50+ std library items, external crates (serde, tokio, clap)
   - Edit distance matching for fuzzy search

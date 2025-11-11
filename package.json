@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.4.36",
+  "version": "0.5.00",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -53,11 +53,11 @@
       {
         "name": "rustyRefactor_extract_to_module",
         "displayName": "Extract Rust Code to Module",
-        "modelDescription": "Extracts selected Rust code from a source file and creates a new module file with intelligent import handling, impl block preservation, and automatic parent module registration. This tool should be used when refactoring Rust code to improve modularity and organization. It handles complex scenarios including: extracting methods from impl blocks (preserves the impl wrapper), copying all necessary imports from the original file, detecting and importing types from parent modules, adjusting relative import paths (super::, self::) to absolute paths (crate::), and automatically registering the new module in the parent with 'pub mod' and 'pub use' statements. The tool works best with complete functions, structs, enums, traits, or impl blocks. It will NOT work with partial code snippets or incomplete syntax. File paths must be absolute paths. Line numbers are 1-based and inclusive.",
+        "modelDescription": "Extracts selected Rust code from a source file and creates a new module file with:\n- Intelligent import handling\n- Impl block preservation\n- Automatic parent module registration\n- rust-analyzer validation\n\nThis tool enforces Rust conventions and ensures only clean, compiling code is delivered.\n\nCRITICAL REQUIREMENTS:\n1) modulePath must be RELATIVE to workspace root, starting with 'src/'.\n   - DO NOT include workspace root path.\n   - Example (CORRECT): 'src/controllers/ads/facebook/facebook_ads.rs'\n   - Example (WRONG): '/home/user/project/src/...'\n   - The 'src/' folder ALREADY EXISTS; do not try to create it.\n2) Module structure must follow 'one module per folder'.\n   - Each module file must be in its own folder with a mod.rs.\n   - Example: 'src/controllers/ads/facebook/' contains both 'mod.rs' AND 'facebook_ads.rs'.\n   - Flat structures like 'src/controllers/ads/facebook_ads.rs' are REJECTED with error.\n3) moduleName must be snake_case (lowercase_with_underscores).\n\nThe tool automatically:\n- Validates extracted code compiles with rust-analyzer (3 auto-fix attempts)\n- Creates missing folders and mod.rs files\n- Removes extracted code from source (no comments)\n- Normalizes paths using built-in Utils.extractWorkspaceRoot()\n- Applies all changes atomically using WorkspaceEdit API\n\nReturns structured JSON with success status, extracted items, and import statements.\nTool will ABORT if validation fails after auto-fix attempts.",
         "icon": "$(symbol-namespace)",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "extract_rust_module",
-        "userDescription": "Extract Rust code to a new module with smart imports and module registration",
+        "userDescription": "Extract Rust code to a new module with validation and auto-fixing",
         "tags": [
           "rust",
           "refactor",
@@ -82,11 +82,15 @@
             },
             "moduleName": {
               "type": "string",
-              "description": "The name of the module to create. Must be in snake_case format (lowercase with underscores), following Rust naming conventions. Examples: 'email_repository', 'user_service', 'pricing_utils'."
+              "description": "The name of the module to create. REQUIRED FORMAT: snake_case (lowercase with underscores). Examples: 'facebook_ads', 'user_service', 'email_repository'. Will be validated and rejected if not snake_case."
             },
             "modulePath": {
               "type": "string",
-              "description": "Optional: The relative path where the module file should be created (e.g., 'src/models/email_repository.rs' or 'src/services/user_service.rs'). If not provided, will use the default path from settings (typically 'src/{moduleName}.rs'). For RustyRoad projects, conventional paths include: controllers/, models/, services/, middleware/, helpers/, utils/."
+              "description": "CRITICAL: Must be RELATIVE path starting with 'src/' - DO NOT include workspace root. The 'src/' directory already exists in the workspace. REQUIRED STRUCTURE: Module must be in its own folder with mod.rs. CORRECT EXAMPLES: 'src/controllers/ads/facebook/facebook_ads.rs' (creates folder 'facebook/' with mod.rs + facebook_ads.rs), 'src/models/user/user_repository.rs'. WRONG EXAMPLES: 'src/controllers/ads/facebook_ads.rs' (flat structure - REJECTED), '/home/user/project/src/...' (absolute path - will be normalized but avoid). Folders are auto-created. For RustyRoad projects use: src/controllers/, src/models/, src/services/, src/middleware/, src/helpers/, src/utils/. If omitted, defaults to 'src/{moduleName}.rs'."
+            },
+            "functionName": {
+              "type": "string",
+              "description": "Optional: Name of a specific function/struct/enum to extract using symbol matching (more reliable than line numbers). If provided, the tool will find the symbol by name and extract it, using line numbers only as fallback."
             }
           },
           "required": [
@@ -131,6 +135,49 @@
             "filePath",
             "startLine",
             "endLine"
+          ]
+        }
+      },
+      {
+        "name": "rustyRefactor_refactor_file",
+        "displayName": "Refactor Rust File",
+        "modelDescription": "High-level orchestration tool that automatically refactors an entire Rust file. This tool automatically: 1) Analyzes the file to discover extractable symbols, 2) Extracts each symbol to appropriate modules based on RustyRoad conventions, 3) Suggests missing imports using existing TypeScript utilities, 4) Returns a complete refactoring plan. The tool leverages the extract_rust_module and analyze_rust tools internally and uses built-in Utils class functions for path normalization and string manipulation. LLM doesn't need to do ANY work - just call this tool with the file path and optionally specify target directory or symbols to extract. The tool handles all the complexity of symbol matching, module creation, and import fixing automatically.",
+        "icon": "$(file-code)",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "refactor_rust_file",
+        "userDescription": "Automatically refactor an entire Rust file with analysis, extraction, and import fixing",
+        "tags": [
+          "rust",
+          "refactor",
+          "orchestration",
+          "automation",
+          "code-organization"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "The absolute path to the Rust file to refactor"
+            },
+            "targetDirectory": {
+              "type": "string",
+              "description": "Optional: Target directory for extracted modules (defaults to RustyRoad conventions). Examples: 'src/models', 'src/services', 'src/controllers'"
+            },
+            "symbolsToExtract": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional: Specific symbols to extract (if empty, extracts all public items)"
+            },
+            "autoFixImports": {
+              "type": "boolean",
+              "description": "Optional: Whether to auto-fix missing imports (default: true)"
+            }
+          },
+          "required": [
+            "filePath"
           ]
         }
       }
@@ -181,6 +228,16 @@
           "type": "boolean",
           "default": true,
           "description": "Integrate with rust-analyzer for better type detection and unused import cleanup"
+        },
+        "rustyRefactor.rustAnalyzerValidationTimeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Maximum time (ms) to wait for rust-analyzer diagnostics to appear while validating extracted modules. Increase for slower systems."
+        },
+        "rustyRefactor.rustAnalyzerValidationPollIntervalMs": {
+          "type": "number",
+          "default": 200,
+          "description": "Polling interval (ms) used when waiting for rust-analyzer diagnostics to change. Lower for faster detection, higher to reduce resource usage."
         },
         "rustyRefactor.aiAutoDocumentation": {
           "type": "boolean",

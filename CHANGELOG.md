@@ -4,6 +4,15 @@ All notable changes to the "Rusty Refactor" extension will be documented in this
 
 ## [Unreleased]
 
+## [0.5.00] - 2025-11-03
+
+### Fixed
+- LLM tools now properly utilize existing TypeScript utilities instead of Rust FFI
+- Added `Utils.extractWorkspaceRoot()` function for proper path normalization
+- Updated `ExtractToModuleTool` to use built-in utilities for path handling
+- Added `rustyRefactor_refactor_file` tool documentation to package.json
+- Improved documentation to emphasize use of existing TypeScript utilities rather than native Rust functions
+
 ## [0.4.36] - 2025-11-03
 
 ### Added - LLM Integration Revolution 🤖

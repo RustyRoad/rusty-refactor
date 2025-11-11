@@ -3,6 +3,7 @@ import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { AnalyzeRustCodeTool } from './AnalyzeRustCodeTool';
 import { ExtractToModuleTool } from './ExtractToModuleTool';
 import { suggestImportsForTypes } from './nativeBridge';
+import { Utils } from './utils';
 
 /**
  * High-level orchestration tool that refactors an entire Rust file.
@@ -171,7 +172,7 @@ export class RefactorFileTool implements vscode.LanguageModelTool<IRefactorFileP
                 try {
                     // Determine module path based on symbol type and conventions
                     const modulePath = this.determineModulePath(symbolName, analysis, params.targetDirectory);
-                    const moduleName = this.toSnakeCase(symbolName);
+                    const moduleName = Utils.toSnakeCase(symbolName);
 
                     extractStep.module_name = moduleName;
                     extractStep.module_path = modulePath;
@@ -294,7 +295,7 @@ export class RefactorFileTool implements vscode.LanguageModelTool<IRefactorFileP
 
     private determineModulePath(symbolName: string, analysis: any, targetDir?: string): string {
         if (targetDir) {
-            return `${targetDir}/${this.toSnakeCase(symbolName)}.rs`;
+            return `${targetDir}/${Utils.toSnakeCase(symbolName)}.rs`;
         }
 
         // Apply RustyRoad conventions
@@ -308,19 +309,12 @@ export class RefactorFileTool implements vscode.LanguageModelTool<IRefactorFileP
         const isEnum = analysis.enums?.some((e: any) => e.name === symbolName);
 
         if (hasImpl && !isStruct) {
-            return `src/services/${this.toSnakeCase(symbolName)}.rs`;
+            return `src/services/${Utils.toSnakeCase(symbolName)}.rs`;
         } else if (isStruct || isEnum) {
-            return `src/models/${this.toSnakeCase(symbolName)}.rs`;
+            return `src/models/${Utils.toSnakeCase(symbolName)}.rs`;
         } else {
-            return `src/utils/${this.toSnakeCase(symbolName)}.rs`;
+            return `src/utils/${Utils.toSnakeCase(symbolName)}.rs`;
         }
-    }
-
-    private toSnakeCase(str: string): string {
-        return str
-            .replace(/([A-Z])/g, '_$1')
-            .toLowerCase()
-            .replace(/^_/, '');
     }
 
     private generateSummary(
