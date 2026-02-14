@@ -299,6 +299,20 @@ export function convertModuleToFolder(
   }
 }
 
+// Extract workspace root from a path, returning the relative portion
+// Handles absolute paths, duplicate workspace roots, and mixed separators
+export function extractWorkspaceRoot(
+  workspaceRoot: string,
+  filePath: string
+): Promise<string> {
+  try {
+    const native = getNativeModule();
+    return native.extract_workspace_root(workspaceRoot, filePath);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
 // ============================================================================
 // Cache Functions
 // ============================================================================

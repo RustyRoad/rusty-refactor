@@ -3,6 +3,7 @@ import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { AnalyzeRustCodeTool } from './AnalyzeRustCodeTool';
 import { ExtractToModuleTool } from './ExtractToModuleTool';
 import { RefactorFileTool } from './RefactorFileTool';
+import { SrpRefactorTool } from './SrpRefactorTool';
 
 /**
  * Register all language model tools for the Rusty Refactor extension
@@ -16,6 +17,14 @@ export function registerLanguageModelTools(
         vscode.lm.registerTool(
             'rustyRefactor_refactor_file',
             new RefactorFileTool(rustAnalyzer)
+        )
+    );
+
+    // Register SRP auto-refactor tool (LLM-planned modular splits)
+    context.subscriptions.push(
+        vscode.lm.registerTool(
+            'rustyRefactor_srp_refactor',
+            new SrpRefactorTool(rustAnalyzer)
         )
     );
 
@@ -35,5 +44,5 @@ export function registerLanguageModelTools(
         )
     );
 
-    console.log('Rusty Refactor language model tools registered (3 tools: refactor_file, extract_to_module, analyze_rust_code)');
+    console.log('Rusty Refactor language model tools registered (4 tools: refactor_file, srp_refactor, extract_to_module, analyze_rust_code)');
 }

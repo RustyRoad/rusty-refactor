@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.5.00",
+  "version": "0.5.1",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -139,6 +139,48 @@
         }
       },
       {
+        "name": "rustyRefactor_srp_refactor",
+        "displayName": "SRP Modular Refactor",
+        "modelDescription": "Automatically refactors a Rust file into cohesive modules following the Single Responsibility Principle (SRP) with a configurable line limit per module. This tool uses an LLM to intelligently plan how to split symbols into groups based on cohesion and responsibility, then executes the extraction plan automatically.\n\nWorkflow:\n1. Analyzes the file to discover all symbols (structs, enums, traits, functions, impl blocks)\n2. Sends the full symbol map to an LLM which plans SRP-based groupings\n3. Extracts each group to its own module folder (one module per folder convention)\n4. Creates mod.rs files with re-exports\n5. Suggests missing imports using FFI (nativeBridge)\n6. Validates with rust-analyzer\n\nThe LLM ensures:\n- Each module has a single, clear responsibility\n- Structs and their impl blocks stay together\n- Tightly coupled helpers stay with their parent symbol\n- Each module stays within the line limit\n\nJust provide the file path. Optionally set maxLinesPerModule (default 50) and targetDirectory.",
+        "icon": "$(split-horizontal)",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "srp_refactor",
+        "userDescription": "Auto-split a Rust file into SRP-compliant modules with LLM-powered planning",
+        "tags": [
+          "rust",
+          "refactor",
+          "srp",
+          "modular",
+          "cohesion",
+          "automation",
+          "llm"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "The absolute path to the Rust file to refactor into SRP modules"
+            },
+            "maxLinesPerModule": {
+              "type": "number",
+              "description": "Maximum non-blank lines per extracted module (default: 50). The LLM will group symbols to stay within this limit."
+            },
+            "targetDirectory": {
+              "type": "string",
+              "description": "Optional: Base directory for extracted modules. Defaults to RustyRoad conventions (src/models, src/services, etc.). Each module gets its own subfolder."
+            },
+            "autoFixImports": {
+              "type": "boolean",
+              "description": "Optional: Whether to auto-fix missing imports after extraction (default: true)"
+            }
+          },
+          "required": [
+            "filePath"
+          ]
+        }
+      },
+      {
         "name": "rustyRefactor_refactor_file",
         "displayName": "Refactor Rust File",
         "modelDescription": "High-level orchestration tool that automatically refactors an entire Rust file. This tool automatically: 1) Analyzes the file to discover extractable symbols, 2) Extracts each symbol to appropriate modules based on RustyRoad conventions, 3) Suggests missing imports using existing TypeScript utilities, 4) Returns a complete refactoring plan. The tool leverages the extract_rust_module and analyze_rust tools internally and uses built-in Utils class functions for path normalization and string manipulation. LLM doesn't need to do ANY work - just call this tool with the file path and optionally specify target directory or symbols to extract. The tool handles all the complexity of symbol matching, module creation, and import fixing automatically.",
@@ -252,7 +294,12 @@
         "rustyRefactor.aiPreferredModel": {
           "type": "string",
           "default": "",
-          "description": "Preferred AI model for documentation (format: vendor/family). Use 'Rusty Refactor: Select AI Model' command to choose."
+          "description": "Preferred AI model for documentation generation (format: vendor/family). Use 'Rusty Refactor: Select AI Model' command to choose."
+        },
+        "rustyRefactor.aiFastModel": {
+          "type": "string",
+          "default": "",
+          "description": "Fast AI model used for validation and summaries (format: vendor/family). Uses models matching 'mini/flash/haiku' automatically if not set. Set to a small fast model like 'copilot/gpt-4o-mini' for faster validation."
         },
         "rustyRefactor.searchDepth": {
           "type": "number",
@@ -264,9 +311,10 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
+    "build:napi": "cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml",
     "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
     "build:ts": "rsbuild build",
-    "build": "npm run build:rust && npm run build:ts",
+    "build": "npm run build:napi && npm run build:rust && npm run build:ts",
     "watch": "rsbuild build --watch",
     "watch:ts": "rsbuild build --watch",
     "dev": "rsbuild dev",

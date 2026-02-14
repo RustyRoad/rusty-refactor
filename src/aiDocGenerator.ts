@@ -30,8 +30,8 @@ export class AIDocGenerator {
                 return null;
             }
 
-            // --- Model Selection (Refactored) ---
-            const model = await this.selectDocumentationModel();
+            // Select the best model for doc generation (uses preferred/full model)
+            const model = await this.selectModelForTask('generate');
             if (!model) {
                 vscode.window.showWarningMessage('No language models available for documentation generation.');
                 return null;
@@ -120,7 +120,9 @@ export class AIDocGenerator {
 
 
             // First: Use LLM as a judge to validate the documentation
-            const judgeResult = await this.validateWithLLMJudge(cleaned, code, model);
+            // Use a fast model for validation since it's a simple yes/no check
+            const judgeModel = await this.selectModelForTask('judge') || model;
+            const judgeResult = await this.validateWithLLMJudge(cleaned, code, judgeModel);
 
             if (!judgeResult.isValid) {
                 logToOutput(`LLM judge rejected the documentation: ${judgeResult.reason}`);
@@ -179,8 +181,8 @@ export class AIDocGenerator {
         const defaultSummary = `// Code extracted to ${modulePath}\n// Available as: ${moduleName}::*`;
 
         try {
-            // --- Model Selection (Refactored) ---
-            const model = await this.selectDocumentationModel();
+            // Use a fast model for summaries (simple single-line output)
+            const model = await this.selectModelForTask('summary');
             if (!model) {
                 logToOutput('No language models available for extraction summary. Using default summary.');
                 return defaultSummary;
@@ -494,6 +496,50 @@ ${documentedCode}
             }
         }
     }
+    /**
+     * Select a model for a specific task. Routes to fast models for simple tasks
+     * (validation, summaries) and full models for complex tasks (doc generation).
+     *
+     * @param task 'generate' for doc generation, 'judge' for validation, 'summary' for summaries
+     */
+    private async selectModelForTask(task: 'generate' | 'judge' | 'summary'): Promise<vscode.LanguageModelChat | null> {
+        const allModels = await vscode.lm.selectChatModels();
+
+        if (allModels.length === 0) {
+            logToOutput('No language models available');
+            return null;
+        }
+
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+
+        // For judge/summary tasks, try the fast model first
+        if (task === 'judge' || task === 'summary') {
+            const fastModelId = config.get<string>('aiFastModel');
+            if (fastModelId) {
+                const fastModel = allModels.find(m => `${m.vendor}/${m.family}` === fastModelId);
+                if (fastModel) {
+                    logToOutput(`[${task}] Using fast model: ${fastModel.name} (${fastModel.vendor}/${fastModel.family})`);
+                    return fastModel;
+                }
+                logToOutput(`[${task}] Fast model ${fastModelId} not available, falling back`);
+            }
+
+            // Prefer smaller/faster models for validation and summaries
+            const fastCandidates = allModels.filter(m =>
+                /mini|flash|haiku|instant|fast|nano|small/i.test(m.family) ||
+                /mini|flash|haiku|instant|fast|nano|small/i.test(m.name)
+            );
+            if (fastCandidates.length > 0) {
+                const model = fastCandidates[0];
+                logToOutput(`[${task}] Auto-selected fast model: ${model.name} (${model.vendor}/${model.family})`);
+                return model;
+            }
+        }
+
+        // For generate tasks (or fallback), use the preferred/best model
+        return this.selectDocumentationModel();
+    }
+
     /**
      * Helper function to select a language model based on user preferences.
      * @returns A promise resolving to the selected model or null if none are available.

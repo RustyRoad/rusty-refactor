@@ -766,3 +766,24 @@ pub fn resolve_project_names(workspace_root: String) -> Result<String> {
     
     Ok(json)
 }
+
+// ============================================================================
+// Path Utility Functions
+// ============================================================================
+
+/// Extract workspace root from a path, returning the relative portion.
+/// Handles absolute paths, duplicate workspace roots, and mixed separators.
+#[napi]
+pub fn extract_workspace_root(workspace_root: String, file_path: String) -> Result<String> {
+    let normalized_path = file_path.replace('\\', "/");
+    let normalized_root = workspace_root.replace('\\', "/");
+    let normalized_root = normalized_root.trim_end_matches('/');
+
+    if normalized_path.starts_with(normalized_root) {
+        let relative = &normalized_path[normalized_root.len()..];
+        let relative = relative.trim_start_matches('/');
+        Ok(relative.to_string())
+    } else {
+        Ok(file_path)
+    }
+}

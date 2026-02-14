@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { RustCodeAnalyzer } from './analyzer';
 import { logToOutput, ModuleExtractor } from './extractor';
 import { IExtractToModuleParameters } from './IExtractToModuleParameters';
+import { extractWorkspaceRoot, isNativeModuleAvailable } from './nativeBridge';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { Utils } from './utils';
 
@@ -357,9 +358,19 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             const defaultPath = config.get<string>('defaultModulePath', 'src');
             let modulePath = params.modulePath || `${defaultPath}/${params.moduleName}.rs`;
 
-            // Normalize the module path to be relative to workspace
-            // This handles both absolute paths and paths with duplicate workspace roots
-            modulePath = Utils.extractWorkspaceRoot(modulePath);
+            // Normalize the module path using Rust FFI (fast native path handling)
+            // Falls back to TypeScript utility if FFI is unavailable
+            const workspaceRoot = workspaceFolder.uri.fsPath;
+            if (isNativeModuleAvailable()) {
+                try {
+                    modulePath = await extractWorkspaceRoot(workspaceRoot, modulePath);
+                } catch (e) {
+                    logToOutput(`[ExtractToModuleTool] FFI path normalization failed, using TS fallback: ${e}`);
+                    modulePath = Utils.extractWorkspaceRoot(modulePath);
+                }
+            } else {
+                modulePath = Utils.extractWorkspaceRoot(modulePath);
+            }
             
             // Normalize path separators to forward slashes
             modulePath = modulePath.replace(/\\/g, '/');

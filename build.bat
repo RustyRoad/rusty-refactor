@@ -8,6 +8,7 @@ if "%1"=="help" goto help
 if "%1"=="setup-dev" goto setup-dev
 if "%1"=="clean" goto clean
 if "%1"=="clean-rust" goto clean-rust
+if "%1"=="build-napi" goto build-napi
 if "%1"=="build-rust" goto build-rust
 if "%1"=="compile" goto compile
 if "%1"=="build" goto build
@@ -34,9 +35,10 @@ echo   help          - Show this help message
 echo   setup-dev     - Initial development setup
 echo   clean         - Clean all build artifacts
 echo   clean-rust    - Clean Rust build artifacts only
+echo   build-napi    - Build NAPI bridge native addon
 echo   build-rust    - Build Rust backend only
 echo   compile       - Compile TypeScript only
-echo   build         - Build Rust + TypeScript (prepublish)
+echo   build         - Build NAPI + Rust + TypeScript (prepublish)
 echo   package       - Package into VSIX file
 echo   publish       - Build and publish to marketplace
 echo   package-publish- Build and package for local distribution
@@ -64,7 +66,15 @@ goto end
 :clean-rust
 echo Cleaning Rust build artifacts...
 if exist "target" rmdir /s /q "target"
+if exist "rust-backend\napi_bridge.win32-x64-msvc.node" del /q "rust-backend\napi_bridge.win32-x64-msvc.node"
 echo ✓ Rust artifacts cleaned
+goto end
+
+:build-napi
+echo Building NAPI bridge...
+cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml
+copy rust-backend\napi_bridge\target\release\napi_bridge.dll rust-backend\napi_bridge.win32-x64-msvc.node
+echo ✓ NAPI bridge built and copied
 goto end
 
 :build-rust
@@ -80,6 +90,7 @@ echo ✓ TypeScript compiled
 goto end
 
 :build
+call :build-napi
 call :build-rust
 call :compile
 echo ✓ Complete build finished

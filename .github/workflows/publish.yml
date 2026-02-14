@@ -78,6 +78,10 @@ jobs:
     - name: Build all components
       run: npm run build
       
+    - name: Copy NAPI bridge to expected location
+      run: |
+        Copy-Item rust-backend/napi_bridge/target/release/napi_bridge.dll rust-backend/napi_bridge.win32-x64-msvc.node
+      
     - name: Package extension
       run: |
         npm install -g @vscode/vsce
