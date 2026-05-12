@@ -112,21 +112,26 @@ function tryRequire(paths: string[]): any {
         logToOutput(`[NativeBridge] ✓ Successfully loaded native module from: ${p}`);
         return mod;
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        logToOutput(`[NativeBridge] ✗ Failed to load from ${p}: ${message}`);
         console.error(`[NativeBridge] ✗ Failed to load from ${p}:`, e);
       }
     }
   }
   
+  logToOutput(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
   console.error(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
   throw new Error('Native addon not found. Build the napi bridge first (npm run build:napi)');
 }
 
 // Try different possible locations for the native module
 const candidates = [
-  // Standard napi location
+  // Standard napi location — platform-specific .node files
   path.join(__dirname, '..', 'rust-backend', 'napi_bridge.win32-x64-msvc.node'),
-  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.darwin-x64.node'),
   path.join(__dirname, '..', 'rust-backend', 'napi_bridge.linux-x64-gnu.node'),
+  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.linux-arm64-gnu.node'),
+  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.darwin-x64.node'),
+  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.darwin-arm64.node'),
   
   // Custom build locations
   path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker.node'),
@@ -226,6 +231,18 @@ export function resolveTraitBounds(code: string): Promise<TraitBound[]> {
   try {
     const native = getNativeModule();
     return native.resolve_trait_bounds(code);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+export function codetetherListModelsNative(): Promise<string[]> {
+  try {
+    const native = getNativeModule();
+    if (typeof native.codetetherListModels !== 'function') {
+      return Promise.resolve([]);
+    }
+    return native.codetetherListModels();
   } catch (e) {
     return Promise.reject(e);
   }

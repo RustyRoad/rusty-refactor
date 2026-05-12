@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.5.1",
+  "version": "0.6.23",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -31,6 +31,25 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rustyRefactor-sidebar",
+          "title": "Codetether Chat",
+          "icon": "images/codetether-chat.svg"
+        }
+      ]
+    },
+    "views": {
+      "rustyRefactor-sidebar": [
+        {
+          "type": "webview",
+          "id": "rustyRefactor.chatView",
+          "name": "Codetether Chat",
+          "icon": "images/codetether-chat.svg"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "rustyRefactor.extractToModule",
@@ -47,6 +66,26 @@
       {
         "command": "rustyRefactor.selectAIModel",
         "title": "Rusty Refactor: Select AI Model for Documentation"
+      },
+      {
+        "command": "rustyRefactor.srpRefactorFile",
+        "title": "Rusty Refactor: SRP Refactor File"
+      },
+      {
+        "command": "rustyRefactor.openCodetetherTui",
+        "title": "Rusty Refactor: Open Codetether TUI"
+      },
+      {
+        "command": "rustyRefactor.configureCodetether",
+        "title": "Rusty Refactor: Configure Codetether"
+      },
+      {
+        "command": "rustyRefactor.fixWithCodetether",
+        "title": "Rusty Refactor: Fix with Codetether"
+      },
+      {
+        "command": "rustyRefactor.fixAllWithCodetether",
+        "title": "Rusty Refactor: Fix All with Codetether"
       }
     ],
     "languageModelTools": [
@@ -305,6 +344,35 @@
           "type": "number",
           "default": 5,
           "description": "Maximum directory depth for file search"
+        },
+        "rustyRefactor.useCodetether": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use Codetether as the AI backend instead of VS Code built-in language models"
+        },
+        "rustyRefactor.codetetherModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model name for Codetether (e.g. zai/glm-5). Leave empty for automatic selection."
+        },
+        "rustyRefactor.codetetherBinaryPath": {
+          "type": "string",
+          "default": "codetether",
+          "description": "Path to the codetether binary. Defaults to 'codetether' (must be on PATH)."
+        },
+        "rustyRefactor.codetetherChatTransport": {
+          "type": "string",
+          "default": "run",
+          "enum": [
+            "run",
+            "serve"
+          ],
+          "description": "Chat transport: 'run' spawns codetether per-request; 'serve' keeps a persistent A2A server."
+        },
+        "rustyRefactor.codetetherA2AServerUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional URL of a remote Codetether A2A server to use for model discovery and chat (e.g. http://localhost:8000). Useful when port-forwarding a cluster-hosted a2a-server."
         }
       }
     }
@@ -322,6 +390,7 @@
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
     "package": "vsce package",
+    "package:dev": "node scripts/package-dev.js",
     "publish": "vsce publish",
     "package-publish": "npm run package"
   },

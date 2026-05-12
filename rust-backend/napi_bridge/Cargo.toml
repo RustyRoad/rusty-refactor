@@ -7,9 +7,12 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "2.14", features = ["full"] }
+napi = { version = "2.14", features = ["full", "async"] }
 napi-derive = "2.14"
 anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+codetether-agent = { path = "../../../programming/codetether-agent" }
+serde_json = "1.0.149"
 
 [build-dependencies]
 napi-build = "2.1"

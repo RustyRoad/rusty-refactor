@@ -6,7 +6,6 @@ import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { suggestImportsForFile } from './rustCompilerBridge';
 import {
     extractFunctionWithTypes,
-    enhancedCargoCheck,
     suggestImportsForTypes,
     analyzeLifetimes,
     resolveTraitBounds,
@@ -18,11 +17,11 @@ import { AIDocGenerator } from './aiDocGenerator';
 
 export const logToOutput = (message: string) => {
     const timestamp = new Date().toISOString();
-    console.log(`[ModuleExtractor] ${timestamp} - ${message}`);
+    console.log(`[RustyRefactor] ${timestamp} - ${message}`);
     // Also try to log to VS Code output channel if available
     const outputChannel = (global as any).rustyRefactorOutputChannel;
     if (outputChannel) {
-        outputChannel.appendLine(`[${timestamp}] [ModuleExtractor] ${message}`);
+        outputChannel.appendLine(`[${timestamp}] ${message}`);
     }
 };
 
@@ -231,6 +230,12 @@ export class ModuleExtractor {
                 const enhancedImports = await this.getEnhancedImports(workspaceRoot);
                 if (enhancedImports) {
                     content += enhancedImports + '\n\n';
+                } else {
+                    // Fall back to parser-based imports when native analysis has no confident result.
+                    const imports = await this.generateImports();
+                    if (imports) {
+                        content += imports + '\n\n';
+                    }
                 }
             }
         } catch (e) {
@@ -253,7 +258,7 @@ export class ModuleExtractor {
         return content;
     }
 
-    private async getEnhancedImports(workspaceRoot: string): Promise<string | null> {
+    private async getEnhancedImports(_workspaceRoot: string): Promise<string | null> {
         try {
             // Try to extract a function with proper type inference
             const editor = vscode.window.activeTextEditor;
@@ -272,18 +277,6 @@ export class ModuleExtractor {
                     // Generate import statements
                     return result.required_imports
                         .map(imp => `use ${imp};`)
-                        .join('\n');
-                }
-            }
-
-            // Fallback: run enhanced cargo check to find unresolved imports
-            const analysis = await enhancedCargoCheck(workspaceRoot, this.document.fileName);
-            if (analysis && analysis.suggested_imports.length > 0) {
-                // Filter high-confidence imports
-                const confidentImports = analysis.suggested_imports.filter(imp => imp.confidence > 0.7);
-                if (confidentImports.length > 0) {
-                    return confidentImports
-                        .map(imp => `${imp.is_glob ? `use ${imp.path}::*;` : `use ${imp.path};`}`)
                         .join('\n');
                 }
             }
@@ -1116,8 +1109,7 @@ export class ModuleExtractor {
             const diagnostics = vscode.languages.getDiagnostics(uri);
             const unusedImportDiagnostics = diagnostics.filter(d =>
                 d.message.includes('unused import') ||
-                d.message.includes('never used') ||
-                (d.source === 'rust-analyzer' && d.severity === vscode.DiagnosticSeverity.Warning)
+                d.message.includes('never used')
             );
 
             if (unusedImportDiagnostics.length > 0) {
@@ -1196,50 +1188,56 @@ export class ModuleExtractor {
         const pollMs = pollIntervalMs ?? config.get<number>('rustAnalyzerValidationPollIntervalMs', 200);
 
         const start = Date.now();
+        const settleWindowMs = Math.max(250, Math.min(750, pollMs * 2));
         const initial = vscode.languages.getDiagnostics(uri) || [];
-        let initialFingerprint = this.getDiagnosticsFingerprint(initial);
+        let lastFingerprint = this.getDiagnosticsFingerprint(initial);
+        let lastChangeAt = start;
 
         return new Promise<void>((resolve) => {
             let disposed = false;
 
-            const tryResolveIfChanged = () => {
+            const cleanupAndResolve = (intervalTimer: NodeJS.Timeout, diagnosticsListener: vscode.Disposable) => {
+                if (disposed) {
+                    return;
+                }
+                disposed = true;
+                clearInterval(intervalTimer);
+                diagnosticsListener.dispose();
+                resolve();
+            };
+
+            const observeDiagnostics = () => {
                 const current = vscode.languages.getDiagnostics(uri) || [];
                 const fingerprint = this.getDiagnosticsFingerprint(current);
-                if (fingerprint !== initialFingerprint) {
-                    initialFingerprint = fingerprint; // update for subsequent waits
-                    if (!disposed) {
-                        disposed = true;
-                        resolve();
-                    }
+                if (fingerprint !== lastFingerprint) {
+                    lastFingerprint = fingerprint;
+                    lastChangeAt = Date.now();
                 }
             };
 
             const diagnosticsListener = vscode.languages.onDidChangeDiagnostics((e) => {
                 if (e.uris.some(u => u.toString() === uri.toString())) {
-                    tryResolveIfChanged();
+                    observeDiagnostics();
                 }
             });
 
             const intervalTimer = setInterval(() => {
-                tryResolveIfChanged();
+                observeDiagnostics();
+
+                // Resolve once diagnostics have remained stable for a short window.
+                if (Date.now() - lastChangeAt >= settleWindowMs) {
+                    cleanupAndResolve(intervalTimer, diagnosticsListener);
+                    return;
+                }
+
                 if (Date.now() - start > timeout) {
-                    if (!disposed) {
-                        disposed = true;
-                        clearInterval(intervalTimer);
-                        diagnosticsListener.dispose();
-                        resolve();
-                    }
+                    cleanupAndResolve(intervalTimer, diagnosticsListener);
                 }
             }, pollMs);
 
             // Also add a final timeout to avoid leaking timers/listeners.
             setTimeout(() => {
-                if (!disposed) {
-                    disposed = true;
-                    clearInterval(intervalTimer);
-                    diagnosticsListener.dispose();
-                    resolve();
-                }
+                cleanupAndResolve(intervalTimer, diagnosticsListener);
             }, timeout);
         });
     }

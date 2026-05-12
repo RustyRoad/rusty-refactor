@@ -189,6 +189,8 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
         
         const fileNameWithoutExt = fileName.replace('.rs', '');
         
+        let structureChanged = false;
+
         if (!modRsExists) {
             // Create mod.rs with proper re-exports
             const modRsContent = [
@@ -202,6 +204,7 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             ].join('\n');
             
             await vscode.workspace.fs.writeFile(modRsUri, Buffer.from(modRsContent, 'utf8'));
+            structureChanged = true;
             logToOutput(`[ExtractToModuleTool] Created mod.rs: ${modRsPath}`);
             logToOutput(`[ExtractToModuleTool] Re-exported: ${fileNameWithoutExt}`);
         } else {
@@ -229,6 +232,7 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
                 edit.insert(modRsUri, insertPos, textToAdd);
                 await vscode.workspace.applyEdit(edit);
                 await modRsDoc.save();
+                structureChanged = true;
                 
                 logToOutput(`[ExtractToModuleTool] Updated mod.rs with: ${fileNameWithoutExt}`);
             } else {
@@ -236,12 +240,14 @@ export class ExtractToModuleTool implements vscode.LanguageModelTool<IExtractToM
             }
         }
         
-        // Trigger rust-analyzer to recognize the new module structure
-        try {
-            await vscode.commands.executeCommand('rust-analyzer.reloadWorkspace');
-            logToOutput(`[ExtractToModuleTool] Triggered rust-analyzer reload`);
-        } catch (err) {
-            logToOutput(`[ExtractToModuleTool] Warning: Could not trigger rust-analyzer reload: ${err}`);
+        if (structureChanged) {
+            // Trigger rust-analyzer only when module structure changed.
+            try {
+                await vscode.commands.executeCommand('rust-analyzer.reloadWorkspace');
+                logToOutput(`[ExtractToModuleTool] Triggered rust-analyzer reload`);
+            } catch (err) {
+                logToOutput(`[ExtractToModuleTool] Warning: Could not trigger rust-analyzer reload: ${err}`);
+            }
         }
     }
 

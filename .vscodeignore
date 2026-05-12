@@ -14,11 +14,13 @@ rsbuild.config.ts
 # Development files
 .vscode/
 .vscode-test/
+.codetether-agent/
 .git/
 .gitignore
 .gitattributes
 *.vsix
 *.log
+nul
 .yarnrc
 vsc-extension-quickstart.md
 
@@ -44,6 +46,8 @@ rust-backend/target/rust-analyzer/
 !rust-backend/target/release/rusty_refactor_worker
 !rust-backend/target/release/librusty_refactor_worker.so
 !rust-backend/target/release/librusty_refactor_worker.dylib
+!rust-backend/napi_bridge.win32-x64-msvc.node
+!rust-backend/napi_bridge.linux-x64-gnu.node
 
 # Security
 **/*.pdb
