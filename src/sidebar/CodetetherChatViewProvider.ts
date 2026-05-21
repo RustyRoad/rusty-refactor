@@ -50,7 +50,8 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
             void this.handleWebviewMessage(data);
         });
         webviewView.webview.html = this.htmlRenderer.render(
-            webviewView.webview
+            webviewView.webview,
+            this.extensionUri,
         );
     }
 

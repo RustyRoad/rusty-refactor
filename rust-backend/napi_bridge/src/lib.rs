@@ -1,9 +1,12 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+#[cfg(feature = "codetether")]
 use std::sync::Arc;
 
 // Re-export types from codetether_agent for our bridge
+#[cfg(feature = "codetether")]
 use codetether_agent::provider::{ProviderRegistry, CompletionRequest, Message, Role, ContentPart, ToolDefinition};
+#[cfg(feature = "codetether")]
 use codetether_agent::provider::parse_model_string;
 
 #[napi]
@@ -53,7 +56,8 @@ pub struct JsChatResponse {
     pub tool_calls: Option<Vec<JsToolCall>>,
 }
 
-/// List available models from codetether-agent
+/// Lists available models from the optional Codetether native bridge.
+#[cfg(feature = "codetether")]
 #[napi]
 pub async fn codetether_list_models() -> Result<Vec<String>> {
     let registry = ProviderRegistry::from_vault()
@@ -90,8 +94,16 @@ pub async fn codetether_list_models() -> Result<Vec<String>> {
     Ok(model_strings)
 }
 
-/// Chat completion via codetether-agent (native bridge)
-#[napi]
+    /// Returns no native models when Codetether is not compiled in.
+    #[cfg(not(feature = "codetether"))]
+    #[napi]
+    pub async fn codetether_list_models() -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    /// Runs native Codetether chat completion when the optional bridge exists.
+    #[cfg(feature = "codetether")]
+    #[napi]
 pub async fn codetether_chat(
     messages: Vec<JsChatMessage>,
     model: Option<String>,
@@ -219,4 +231,20 @@ pub async fn codetether_chat(
         text: if text_parts.is_empty() { None } else { Some(text_parts.join("")) },
         tool_calls: if parsed_tool_calls.is_empty() { None } else { Some(parsed_tool_calls) },
     })
+}
+
+/// Reports that native Codetether support was not compiled into the bridge.
+#[cfg(not(feature = "codetether"))]
+#[napi]
+pub async fn codetether_chat(
+    _messages: Vec<JsChatMessage>,
+    _model: Option<String>,
+    _max_tokens: Option<i32>,
+    _temperature: Option<f64>,
+    _tools: Option<Vec<JsToolDefinition>>,
+) -> Result<JsChatResponse> {
+    Err(Error::from_reason(
+        "Native Codetether support was built without the optional codetether \
+feature. Use the CLI/A2A transport instead.",
+    ))
 }

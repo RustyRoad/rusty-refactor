@@ -121,17 +121,19 @@ function tryRequire(paths: string[]): any {
   
   logToOutput(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
   console.error(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
-  throw new Error('Native addon not found. Build the napi bridge first (npm run build:napi)');
+    throw new Error(
+      'Native addon not found. Build the napi bridge first '
+      + '(npm run build:napi). Packaged native binaries currently '
+      + 'support win32-x64 and linux-x64.'
+    );
 }
 
-// Try different possible locations for the native module
+  // Try different possible locations for the native module.
+  // Keep this list aligned with the packaged binaries.
 const candidates = [
-  // Standard napi location — platform-specific .node files
+    // Standard napi location — currently packaged .node files.
   path.join(__dirname, '..', 'rust-backend', 'napi_bridge.win32-x64-msvc.node'),
   path.join(__dirname, '..', 'rust-backend', 'napi_bridge.linux-x64-gnu.node'),
-  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.linux-arm64-gnu.node'),
-  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.darwin-x64.node'),
-  path.join(__dirname, '..', 'rust-backend', 'napi_bridge.darwin-arm64.node'),
   
   // Custom build locations
   path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker.node'),
@@ -239,10 +241,13 @@ export function resolveTraitBounds(code: string): Promise<TraitBound[]> {
 export function codetetherListModelsNative(): Promise<string[]> {
   try {
     const native = getNativeModule();
-    if (typeof native.codetetherListModels !== 'function') {
+    const listModels = native.codetether_list_models
+      ?? native.codetetherListModels;
+
+    if (typeof listModels !== 'function') {
       return Promise.resolve([]);
     }
-    return native.codetetherListModels();
+    return listModels();
   } catch (e) {
     return Promise.reject(e);
   }

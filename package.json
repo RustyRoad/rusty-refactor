@@ -362,7 +362,7 @@
         },
         "rustyRefactor.codetetherChatTransport": {
           "type": "string",
-          "default": "run",
+          "default": "serve",
           "enum": [
             "run",
             "serve"
@@ -379,7 +379,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build:napi": "cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml",
+    "build:napi": "cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml && node scripts/copy-napi.js",
     "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
     "build:ts": "rsbuild build",
     "build": "npm run build:napi && npm run build:rust && npm run build:ts",

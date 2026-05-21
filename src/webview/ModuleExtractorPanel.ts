@@ -619,7 +619,8 @@ export class ModuleExtractorPanel {
         return pathValue
             .split(/[\\/]/)
             .map((segment) => segment.trim())
-            .filter(Boolean);
+            .filter(Boolean)
+            .filter((segment) => segment !== '.' && segment !== '..');
     }
 
     /**
@@ -629,6 +630,11 @@ export class ModuleExtractorPanel {
      * workspace root throughout the panel and webview protocol.
      */
     private _normalizePath(relativePath: string): string {
+        if (path.posix.isAbsolute(relativePath.replace(/\\/g, '/')) ||
+            path.win32.isAbsolute(relativePath)) {
+            return '';
+        }
+
         const segments = this._splitPath(relativePath);
         if (segments.length === 0) {
             return '';
@@ -679,8 +685,25 @@ export class ModuleExtractorPanel {
      * panel works across local, remote, and virtual workspaces.
      */
     private _toUri(relativePath: string): vscode.Uri {
-        const segments = this._splitPath(relativePath);
-        return vscode.Uri.joinPath(this._workspaceFolder.uri, ...segments);
+        const normalized = this._normalizePath(relativePath);
+        const segments = this._splitPath(normalized);
+        const targetUri = vscode.Uri.joinPath(
+            this._workspaceFolder.uri,
+            ...segments,
+        );
+
+        if (this._workspaceFolder.uri.scheme === 'file' &&
+            targetUri.scheme === 'file') {
+            const workspacePath = path.resolve(this._workspaceFolder.uri.fsPath);
+            const targetPath = path.resolve(targetUri.fsPath);
+            const relative = path.relative(workspacePath, targetPath);
+
+            if (relative.startsWith('..') || path.isAbsolute(relative)) {
+                return this._workspaceFolder.uri;
+            }
+        }
+
+        return targetUri;
     }
 
     /**
