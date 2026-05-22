@@ -13,6 +13,7 @@ import { CodetetherClient, UnifiedModelClient } from './codetetherClient';
 import { CodetetherCodeActionProvider, handleFixWithCodetether, handleFixAllWithCodetether } from './fixWithCodetether';
 import { registerChatParticipant } from './chatParticipant';
 import { CodetetherChatViewProvider } from './sidebar/CodetetherChatViewProvider';
+import { handleDocumentWithCodetether } from './documentWithCodetether';
 
 import {
     enhancedCargoCheck,
@@ -355,6 +356,13 @@ export function activate(context: vscode.ExtensionContext) {
             }
         );
 
+        const documentWithCodetetherCommand = vscode.commands.registerCommand(
+            'rustyRefactor.documentWithCodetether',
+            async () => {
+                await handleDocumentWithCodetether();
+            }
+        );
+
         // Register command: Configure Codetether server/client
         const configureCodetetherCommand = vscode.commands.registerCommand(
             'rustyRefactor.configureCodetether',
@@ -488,7 +496,8 @@ export function activate(context: vscode.ExtensionContext) {
             fixWithCodetetherCommand,
             fixAllWithCodetetherCommand,
             configureCodetetherCommand,
-            openCodetetherTuiCommand
+            openCodetetherTuiCommand,
+            documentWithCodetetherCommand
         );
 
         outputChannel.appendLine('✓ All commands registered successfully');

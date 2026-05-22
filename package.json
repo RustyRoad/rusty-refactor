@@ -86,6 +86,10 @@
       {
         "command": "rustyRefactor.fixAllWithCodetether",
         "title": "Rusty Refactor: Fix All with Codetether"
+      },
+      {
+        "command": "rustyRefactor.documentWithCodetether",
+        "title": "Rusty Refactor: Document with Codetether"
       }
     ],
     "languageModelTools": [
@@ -265,6 +269,11 @@
     ],
     "menus": {
       "editor/context": [
+        {
+          "when": "editorHasSelection",
+          "command": "rustyRefactor.documentWithCodetether",
+          "group": "1_modification@0"
+        },
         {
           "when": "editorHasSelection && editorLangId == rust",
           "command": "rustyRefactor.extractToModuleWithSearch",

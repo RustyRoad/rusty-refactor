@@ -3,7 +3,13 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
+import { CodetetherClient, ChatMessage } from './codetetherClient';
 import { logToOutput } from './extractor';
+
+interface DocumentationStyle {
+    languageLabel: string;
+    syntaxGuidance: string[];
+}
 
 /**
  * Provides AI-powered documentation generation for Rust code
@@ -11,6 +17,11 @@ import { logToOutput } from './extractor';
  */
 export class AIDocGenerator {
     private static hasWarnedAboutMissingLm = false;
+    private readonly codetetherClient: CodetetherClient;
+
+    public constructor() {
+        this.codetetherClient = new CodetetherClient();
+    }
 
     /**
      * Generates comprehensive Rust documentation for a given code snippet.
@@ -23,7 +34,10 @@ export class AIDocGenerator {
      * @returns A promise that resolves to the documented code as a string, or null if an error occurs.
      */
 
-    async generateDocumentation(code: string, moduleName: string): Promise<string | null> {
+    async generateDocumentation(
+        code: string,
+        moduleName: string
+    ): Promise<string | null> {
         try {
             if (!this.isLanguageModelApiAvailable()) {
                 this.warnLanguageModelUnavailable();
@@ -40,36 +54,9 @@ export class AIDocGenerator {
             logToOutput('Using language model for documentation generation.');
             logToOutput(`Selected model: ${model.name} (${model.vendor})`);
 
-            // Construct prompt using built-in LM API message helpers
+            const prompt = this.buildDocumentationPrompt(moduleName, code);
             const messages = [
-                vscode.LanguageModelChatMessage.User(
-                    `You are an expert in Rust and its documentation conventions (rustdoc).
-                    Your task is to ENHANCE the existing documentation comments in the provided Rust code module.
-
-                    **Rules:**
-                    1.  If there's already a basic module-level doc comment (//!), IMPROVE it with more detail while keeping the same structure.
-                    2.  Add doc comments (///) for all public items (functions, structs, enums, traits, impl blocks) that don't already have them.
-                    3.  For functions, include descriptions of parameters using the format: \`param_name\` - description.
-                    4.  Include a clear description of the return value.
-                    5.  When a function can panic, include a '# Panics' section detailing the conditions that cause a panic.
-                    6.  If a function returns a Result, include an '# Errors' section describing the possible error conditions.
-                    7.  For \`unsafe\` functions, include a '# Safety' section explaining the invariants the caller must uphold.
-                    8.  Provide meaningful code examples in \`\`\`rust code blocks where appropriate to illustrate usage.
-                    9.  Keep descriptions informative yet concise.
-                    10. Adhere strictly to rustdoc conventions.
-                    11. **Crucially, do not modify the actual Rust code.** Only add or enhance documentation comments.
-                    12. **NEVER replace function bodies, struct fields, or any code with placeholder comments**
-                    13. **NEVER use phrases like "remains unchanged", "implementation remains", "Field definitions remain", etc.**
-                    14. **PRESERVE ALL function bodies, struct fields, enum variants, and executable code EXACTLY as-is**
-                    15. Return the complete code with enhanced documentation.
-                    16. Maintain the original code's structure and formatting exactly.
-                    17. **Do NOT wrap your output in markdown code blocks (\`\`\`rust).** Return raw Rust code only.
-                    
-                    CRITICAL: Your output MUST contain ALL the original code PLUS documentation comments. Nothing should be removed or replaced with placeholders.`
-                ),
-                vscode.LanguageModelChatMessage.User(
-                    `Module name: ${moduleName}\n\nEnhance the documentation in this Rust code:\n\n${code}`
-                )
+                vscode.LanguageModelChatMessage.User(prompt),
             ];
 
             // Use built-in LM chat request options (mirrors VS Code's native flow)
@@ -160,6 +147,145 @@ export class AIDocGenerator {
                 logToOutput(`Error generating documentation: ${err}`);
                 vscode.window.showErrorMessage('An unexpected error occurred while generating documentation.');
             }
+            return null;
+        }
+    }
+
+    /**
+     * Generates Rust documentation using Codetether for the provided code.
+     *
+     * The returned code must preserve the original logic exactly and only add
+     * or improve rustdoc comments.
+     */
+    async generateDocumentationWithCodetether(
+        code: string,
+        moduleName: string,
+        sourceFilePath: string,
+    ): Promise<string | null> {
+        try {
+            const messages: ChatMessage[] = [
+                {
+                    role: 'system',
+                    content: [
+                        'You are an expert Rust documentation writer.',
+                        'Follow rustdoc conventions exactly.',
+                        'Only add or improve documentation comments.',
+                        'Do not change executable Rust code.',
+                    ].join(' '),
+                },
+                {
+                    role: 'user',
+                    content: this.buildDocumentationPrompt(moduleName, code),
+                },
+            ];
+
+            const response = await this.codetetherClient.chatCompletion(
+                messages,
+                { filePaths: [sourceFilePath] },
+            );
+            const cleaned = this.cleanMarkdownCodeBlocks(
+                response.text || '',
+            );
+
+            if (!cleaned) {
+                return null;
+            }
+
+            if (this.containsPlaceholderText(cleaned)) {
+                logToOutput(
+                    'Codetether generated placeholder documentation; '
+                    + 'rejecting output.',
+                );
+                return null;
+            }
+
+            const validationResult = await this.validateWithDiagnostics(
+                cleaned,
+                code,
+                moduleName,
+            );
+
+            if (!validationResult.isValid) {
+                logToOutput(
+                    `Codetether documentation failed validation: `
+                    + `${validationResult.errors.join('; ')}`,
+                );
+
+                if (validationResult.canRetry) {
+                    return this.retryDocumentationWithCodetether(
+                        code,
+                        moduleName,
+                        sourceFilePath,
+                        validationResult.errors,
+                    );
+                }
+
+                return null;
+            }
+
+            return cleaned;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logToOutput(
+                `Error generating documentation with Codetether: ${message}`,
+            );
+            return null;
+        }
+    }
+
+    /**
+     * Generates documentation for a selected code snippet using Codetether.
+     *
+     * This path is language-aware and is intended for direct editor
+     * selections, not only extracted Rust modules.
+     */
+    async generateSelectionDocumentationWithCodetether(
+        code: string,
+        moduleName: string,
+        sourceFilePath: string,
+        languageId: string,
+    ): Promise<string | null> {
+        const prompt = this.buildSelectionDocumentationPrompt(
+            moduleName,
+            code,
+            languageId,
+        );
+
+        try {
+            const response = await this.codetetherClient.chatCompletion(
+                this.codetetherDocumentationMessages(prompt, languageId),
+                { filePaths: [sourceFilePath] },
+            );
+            const cleaned = this.cleanMarkdownCodeBlocks(
+                response.text || '',
+            );
+            const errors = this.validateSelectionDocumentation(
+                code,
+                cleaned,
+            );
+
+            if (errors.length === 0) {
+                return cleaned;
+            }
+
+            logToOutput(
+                '[Codetether Docs] Selection documentation failed: '
+                + errors.join('; '),
+            );
+
+            return this.retrySelectionDocumentationWithCodetether(
+                code,
+                moduleName,
+                sourceFilePath,
+                languageId,
+                errors,
+            );
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logToOutput(
+                '[Codetether Docs] Selection documentation error: '
+                + message,
+            );
             return null;
         }
     }
@@ -285,6 +411,310 @@ export class AIDocGenerator {
         let cleaned = code.replace(/```rust\n?/g, '');
         cleaned = cleaned.replace(/```\n?/g, '');
         return cleaned.trim();
+    }
+
+    /**
+     * Returns whether a generated response replaced code with placeholders.
+     */
+    private containsPlaceholderText(code: string): boolean {
+        return code.includes('remains unchanged') ||
+            code.includes('implementation remains') ||
+            code.includes('Field definitions remain') ||
+            code.includes('// Function implementation') ||
+            code.includes('// Field definitions');
+    }
+
+    /**
+     * Builds the concrete documentation instructions shared by all backends.
+     */
+    private buildDocumentationPrompt(
+        moduleName: string,
+        code: string,
+    ): string {
+        return [
+            'Document this Rust code using real rustdoc, not placeholders.',
+            '',
+            `Module name: ${moduleName}`,
+            '',
+            'How to document it:',
+            '1. Improve any existing //! module docs instead of deleting them.',
+            '2. Add /// docs above every public function, struct, enum, trait,',
+            '   type alias, const, static, and impl block that needs docs.',
+            '3. Start each item with a short summary sentence describing what',
+            '   the item does and why it exists.',
+            '4. For public functions and methods, include:',
+            '   - behavior and important side effects',
+            '   - # Arguments with each parameter explained',
+            '   - # Returns when the return value is not obvious',
+            '   - # Errors for Result-returning APIs',
+            '   - # Panics when panic conditions exist',
+            '   - # Safety for unsafe functions or unsafe requirements',
+            '   - # Examples with a small realistic rust example when useful',
+            '5. For structs, enums, and traits, explain the responsibility,',
+            '   invariants, and how the type is intended to be used.',
+            '6. Keep docs concise, specific, and technically accurate.',
+            '7. Preserve every line of Rust code exactly as-is. Do not rename,',
+            '   reorder, remove, or rewrite code.',
+            '8. Do not replace code with comments like "remains unchanged".',
+            '9. Return the complete Rust source file contents only.',
+            '10. Do not wrap the answer in markdown code fences.',
+            '',
+            'Rust code to document:',
+            code,
+        ].join('\n');
+    }
+
+    /**
+     * Builds the documentation prompt used for direct editor selections.
+     */
+    private buildSelectionDocumentationPrompt(
+        moduleName: string,
+        code: string,
+        languageId: string,
+    ): string {
+        const style = this.documentationStyle(languageId);
+
+        return [
+            `Document this ${style.languageLabel} code with real, useful`,
+            'documentation. Do not use placeholders.',
+            '',
+            `Module or file name: ${moduleName}`,
+            `Language: ${style.languageLabel}`,
+            '',
+            'How to document it:',
+            ...style.syntaxGuidance,
+            '1. Add or improve documentation only. Do not change program',
+            '   behavior, names, signatures, order, or executable logic.',
+            '2. Preserve the original code exactly and keep all existing',
+            '   code lines present in the output.',
+            '3. Document public or externally used items first, then add',
+            '   concise docs for important private helpers when helpful.',
+            '4. For functions and methods, describe purpose, parameters,',
+            '   return value, side effects, thrown errors, and important',
+            '   preconditions where relevant.',
+            '5. For classes, structs, enums, interfaces, and modules,',
+            '   explain responsibility, invariants, and intended usage.',
+            '6. Use realistic examples only when they add value.',
+            '7. Never write comments like "remains unchanged" or replace',
+            '   code with summary text.',
+            '8. Return the full code selection only.',
+            '9. Do not wrap the answer in markdown code fences.',
+            '',
+            `Selected ${style.languageLabel} code:`,
+            code,
+        ].join('\n');
+    }
+
+    /**
+     * Returns the system and user messages for Codetether documentation.
+     */
+    private codetetherDocumentationMessages(
+        prompt: string,
+        languageId: string,
+    ): ChatMessage[] {
+        const style = this.documentationStyle(languageId);
+
+        return [
+            {
+                role: 'system',
+                content: [
+                    `You are an expert ${style.languageLabel}`,
+                    'documentation writer.',
+                    'Add or improve documentation only.',
+                    'Preserve all executable code exactly.',
+                ].join(' '),
+            },
+            { role: 'user', content: prompt },
+        ];
+    }
+
+    /**
+     * Validates direct-selection documentation output.
+     */
+    private validateSelectionDocumentation(
+        originalCode: string,
+        documentedCode: string,
+    ): string[] {
+        const errors: string[] = [];
+
+        if (!documentedCode.trim()) {
+            errors.push('Codetether returned an empty response.');
+            return errors;
+        }
+
+        if (this.containsPlaceholderText(documentedCode)) {
+            errors.push('Response contained placeholder text.');
+        }
+
+        const originalLines = originalCode
+            .split('\n')
+            .map((line) => line.trimEnd())
+            .filter((line) => line.trim().length > 0);
+        const missingLines = originalLines.filter(
+            (line) => !documentedCode.includes(line),
+        );
+
+        if (missingLines.length > 0) {
+            errors.push(
+                `Response did not preserve ${missingLines.length} original `
+                + 'code lines exactly.',
+            );
+        }
+
+        const originalCount = originalLines.length;
+        const documentedCount = documentedCode
+            .split('\n')
+            .filter((line) => line.trim().length > 0)
+            .length;
+
+        if (originalCount > 0 && documentedCount / originalCount < 0.8) {
+            errors.push('Response is unexpectedly shorter than the input.');
+        }
+
+        return errors;
+    }
+
+    /**
+     * Retries direct-selection documentation with validation feedback.
+     */
+    private async retrySelectionDocumentationWithCodetether(
+        code: string,
+        moduleName: string,
+        sourceFilePath: string,
+        languageId: string,
+        previousErrors: string[],
+    ): Promise<string | null> {
+        const prompt = [
+            this.buildSelectionDocumentationPrompt(
+                moduleName,
+                code,
+                languageId,
+            ),
+            '',
+            'Your previous attempt failed for these reasons:',
+            ...previousErrors.map(
+                (error, index) => `${index + 1}. ${error}`,
+            ),
+            '',
+            'Fix those problems and return the full documented code again.',
+        ].join('\n');
+
+        try {
+            const response = await this.codetetherClient.chatCompletion(
+                this.codetetherDocumentationMessages(prompt, languageId),
+                { filePaths: [sourceFilePath] },
+            );
+            const cleaned = this.cleanMarkdownCodeBlocks(
+                response.text || '',
+            );
+            const errors = this.validateSelectionDocumentation(code, cleaned);
+
+            return errors.length === 0 ? cleaned : null;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logToOutput(`[Codetether Docs] Retry failed: ${message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Returns language-specific documentation syntax guidance.
+     */
+    private documentationStyle(languageId: string): DocumentationStyle {
+        switch (languageId) {
+            case 'rust':
+                return {
+                    languageLabel: 'Rust',
+                    syntaxGuidance: [
+                        '1. Use rustdoc comments: //! for module docs and ///',
+                        '   for items.',
+                    ],
+                };
+            case 'typescript':
+            case 'typescriptreact':
+            case 'javascript':
+            case 'javascriptreact':
+                return {
+                    languageLabel: 'TypeScript/JavaScript',
+                    syntaxGuidance: [
+                        '1. Use JSDoc blocks /** ... */ above documented',
+                        '   symbols.',
+                        '2. Include @param, @returns, @throws, and @example',
+                        '   tags when they are relevant.',
+                    ],
+                };
+            case 'python':
+                return {
+                    languageLabel: 'Python',
+                    syntaxGuidance: [
+                        '1. Use triple-quoted docstrings for modules,',
+                        '   classes, and functions.',
+                    ],
+                };
+            default:
+                return {
+                    languageLabel: languageId || 'source code',
+                    syntaxGuidance: [
+                        '1. Use the language\'s idiomatic documentation',
+                        '   syntax. If there is no formal doc syntax, use',
+                        '   concise leading comments above the relevant item.',
+                    ],
+                };
+        }
+    }
+
+    /**
+     * Retries Codetether documentation with validation feedback.
+     */
+    private async retryDocumentationWithCodetether(
+        code: string,
+        moduleName: string,
+        sourceFilePath: string,
+        previousErrors: string[],
+    ): Promise<string | null> {
+        const prompt = [
+            this.buildDocumentationPrompt(moduleName, code),
+            '',
+            'Your previous attempt failed validation for these reasons:',
+            ...previousErrors.map((error, index) => `${index + 1}. ${error}`),
+            '',
+            'Fix those issues and return the full Rust code again.',
+        ].join('\n');
+
+        try {
+            const response = await this.codetetherClient.chatCompletion(
+                [
+                    {
+                        role: 'system',
+                        content: [
+                            'You are an expert Rust documentation writer.',
+                            'Only add documentation comments.',
+                            'Preserve code exactly.',
+                        ].join(' '),
+                    },
+                    { role: 'user', content: prompt },
+                ],
+                { filePaths: [sourceFilePath] },
+            );
+            const cleaned = this.cleanMarkdownCodeBlocks(
+                response.text || '',
+            );
+            if (!cleaned || this.containsPlaceholderText(cleaned)) {
+                return null;
+            }
+
+            const validationResult = await this.validateWithDiagnostics(
+                cleaned,
+                code,
+                moduleName,
+            );
+
+            return validationResult.isValid ? cleaned : null;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logToOutput(`Codetether retry failed: ${message}`);
+            return null;
+        }
     }
 
     private isLanguageModelApiAvailable(): boolean {
