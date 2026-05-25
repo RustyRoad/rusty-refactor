@@ -1,0 +1,105 @@
+// Generates the browser-side Codetether chat state runtime.
+//
+// TetherScript is the editable source of truth for the chat state contract.
+// The browser runtime template stays in JavaScript because VS Code webviews
+// execute JavaScript, while this file owns the schema and generated artifact.
+
+// Defines the rich chat state contract consumed by the webview runtime.
+fn chat_state_spec() {
+    let defaults = map()
+    defaults.busy = false
+    defaults.statusText = "Ready"
+    defaults.busyStatusText = "Working..."
+    defaults.modelStatus = "Loading models..."
+    defaults.mode = "orchestrate"
+    defaults.feature = "swarm"
+    defaults.includeContext = true
+    defaults.voiceInputSupported = false
+    defaults.voiceInputActive = false
+    defaults.voiceInputSource = "windows-default"
+    defaults.subagentSummary = ""
+
+    let spec = map()
+    spec.version = 1
+    spec.name = "codetether-chat-state"
+    spec.defaults = defaults
+    spec.actions = [
+        "appendMessage",
+        "clearChat",
+        "hostMessageReceived",
+        "modelsListed",
+        "sessionsListed",
+        "setActiveProvider",
+        "setBusy",
+        "setCustomModel",
+        "setDraft",
+        "setFeature",
+        "setIncludeContext",
+        "setMode",
+        "setModelStatus",
+        "setSelectedModel",
+        "setSelectedVoice",
+        "setSpeakingMessage",
+        "setSpeechVoices",
+        "setSpeechSupported",
+        "setSubagents",
+        "setVoiceInputActive",
+        "setVoiceInputSource",
+        "setVoiceInputSources",
+        "setVoiceInputSupported",
+        "toggleProvider"
+    ]
+    spec.modes = [
+        "chat",
+        "agent",
+        "orchestrate",
+        "plan",
+        "review"
+    ]
+    spec.features = [
+        "auto",
+        "code",
+        "debug",
+        "refactor",
+        "search",
+        "test",
+        "git",
+        "browser",
+        "swarm",
+        "prd"
+    ]
+    spec.messageRoles = [
+        "user",
+        "assistant",
+        "system",
+        "tool"
+    ]
+    spec.toolEventKinds = [
+        "call",
+        "result"
+    ]
+    return spec
+}
+
+// Reads the browser runtime template from the webview source tree.
+fn runtime_template() {
+    let path = path_join([
+        "webview-src",
+        "codetether-chat",
+        "state-runtime.template.js"
+    ]).unwrap()
+    fs_read(path).unwrap()
+}
+
+// Replaces the schema placeholder with generated JSON.
+fn render_runtime(template, spec_json) {
+    template.replace("__CODETETHER_CHAT_STATE_SPEC__", spec_json)
+}
+
+// Writes the generated browser runtime into the packaged media directory.
+fn main() {
+    let spec_json = json_encode_pretty(chat_state_spec())
+    let source = render_runtime(runtime_template(), spec_json)
+    fs_write("media/chat-sidebar-state.generated.js", source).unwrap()
+    println("generated media/chat-sidebar-state.generated.js")
+}

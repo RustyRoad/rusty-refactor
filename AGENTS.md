@@ -62,6 +62,57 @@ When modifying existing code:
 4. Enforce the 80-character line limit in all changed lines.
 5. Leave nearby code more cohesive when practical.
 
+## Dev Packaging And Install Process
+
+When asked to package and install a dev build:
+
+1. Run `npm run package:dev` from the repository root.
+2. Use the newest generated `rusty-refactor-*.vsix` file.
+3. Install into the active VS Code target.
+   - Prefer `code-insiders` when the user's active window or logs show
+     VS Code Insiders.
+   - Otherwise use `code`.
+4. Install with:
+
+   ```powershell
+   code-insiders --install-extension <vsix-file> --force
+   ```
+
+   or:
+
+   ```powershell
+   code --install-extension <vsix-file> --force
+   ```
+
+5. Verify the installed version with:
+
+   ```powershell
+   code-insiders --list-extensions --show-versions
+   ```
+
+   or:
+
+   ```powershell
+   code --list-extensions --show-versions
+   ```
+
+6. Tell the user to run `Developer: Reload Window` if VS Code is already
+   open and the extension needs to reload.
+
+## Codetether Chat Webview State
+
+The Codetether chat sidebar uses TetherScript as the source of truth for its
+browser state contract.
+
+1. Edit `webview-src/codetether-chat/state.tether` for state fields,
+   actions, modes, feature presets, and message/tool event contracts.
+2. Edit `webview-src/codetether-chat/state-runtime.template.js` only for the
+   browser reducer and selectors that consume that contract.
+3. Run `npm run build:tether-chat` after changing either file.
+4. Commit the generated `media/chat-sidebar-state.generated.js` with the
+   source change so packaged builds do not depend on runtime generation.
+5. `npm run build:ts` already runs `build:tether-chat` before `rsbuild`.
+
 ## Review Checklist
 
 Before considering work complete, verify:

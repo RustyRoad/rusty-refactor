@@ -29,6 +29,7 @@ export const BUILT_IN_MODELS = ['zai/glm-5', 'zai/glm-5.1'];
 export const CHAT_MODES: ChatMode[] = [
     'chat',
     'agent',
+    'orchestrate',
     'plan',
     'review'
 ];

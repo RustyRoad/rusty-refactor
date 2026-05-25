@@ -3,13 +3,18 @@ import * as vscode from 'vscode';
 import { EditorContextCollector } from './editorContextCollector';
 import { featureInstruction, modeInstruction } from './chatModes';
 import { ChatMode, CodetetherFeature } from './chatTypes';
+import { SubagentWorkflow } from './subagentWorkflow';
 
 /**
  * Builds Codetether prompts from user text, mode, feature, and editor context.
  */
 export class AgentPromptBuilder {
+    /**
+     * Creates prompt collaborators for editor context and delegation policy.
+     */
     public constructor(
-        private readonly editorContextCollector = new EditorContextCollector()
+        private readonly editorContextCollector = new EditorContextCollector(),
+        private readonly subagentWorkflow = new SubagentWorkflow()
     ) {}
 
     /**
@@ -34,7 +39,8 @@ export class AgentPromptBuilder {
             'User request:',
             userText,
             '',
-            this.toolRuntimeInstruction()
+            this.toolRuntimeInstruction(),
+            this.subagentWorkflow.instruction()
         ].filter(Boolean).join('\n\n');
     }
 

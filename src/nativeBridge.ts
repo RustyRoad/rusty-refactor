@@ -1,6 +1,9 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { createRequire } from 'module';
 import { logToOutput } from './extractor';
+
+const nodeRequire = createRequire(__filename);
 
 // Type definitions for our native module
 interface EnhancedOutput {
@@ -96,10 +99,14 @@ interface CacheStatsResult {
   hit_rate: number;
 }
 
-// Native loader that attempts to find the compiled addon
+/**
+ * Loads the first available native addon without bundler rewriting.
+ */
 function tryRequire(paths: string[]): any {
   logToOutput(`[NativeBridge] __dirname is: ${__dirname}`);
-  logToOutput(`[NativeBridge] Attempting to load native module from ${paths.length} candidates`);
+  logToOutput(
+    `[NativeBridge] Attempting to load ${paths.length} candidates`
+  );
   
   for (const p of paths) {
     const exists = fs.existsSync(p);
@@ -107,9 +114,8 @@ function tryRequire(paths: string[]): any {
     
     if (exists) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const mod = require(/* webpackIgnore: true */ p);
-        logToOutput(`[NativeBridge] ✓ Successfully loaded native module from: ${p}`);
+        const mod = nodeRequire(p);
+        logToOutput(`[NativeBridge] Loaded native module from: ${p}`);
         return mod;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -119,8 +125,12 @@ function tryRequire(paths: string[]): any {
     }
   }
   
-  logToOutput(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
-  console.error(`[NativeBridge] Native addon not found in any of ${paths.length} locations`);
+  logToOutput(
+    `[NativeBridge] Native addon missing from ${paths.length} locations`
+  );
+  console.error(
+    `[NativeBridge] Native addon missing from ${paths.length} locations`
+  );
     throw new Error(
       'Native addon not found. Build the napi bridge first '
       + '(npm run build:napi). Packaged native binaries currently '
@@ -136,10 +146,38 @@ const candidates = [
   path.join(__dirname, '..', 'rust-backend', 'napi_bridge.linux-x64-gnu.node'),
   
   // Custom build locations
-  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker.node'),
-  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'rusty_refactor_worker_lib.dll'),
-  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'librusty_refactor_worker.so'),
-  path.join(__dirname, '..', 'rust-backend', 'target', 'release', 'librusty_refactor_worker.dylib'),
+  path.join(
+    __dirname,
+    '..',
+    'rust-backend',
+    'target',
+    'release',
+    'rusty_refactor_worker.node'
+  ),
+  path.join(
+    __dirname,
+    '..',
+    'rust-backend',
+    'target',
+    'release',
+    'rusty_refactor_worker_lib.dll'
+  ),
+  path.join(
+    __dirname,
+    '..',
+    'rust-backend',
+    'target',
+    'release',
+    'librusty_refactor_worker.so'
+  ),
+  path.join(
+    __dirname,
+    '..',
+    'rust-backend',
+    'target',
+    'release',
+    'librusty_refactor_worker.dylib'
+  ),
   path.join(__dirname, '..', 'rust-backend', 'index.node'),
 ].filter(p => {
   try {
@@ -173,7 +211,10 @@ function getNativeModule(): any {
 }
 
 // Export wrapper functions with proper error handling
-export function enhancedCargoCheck(workspaceRoot: string, targetFile: string): Promise<EnhancedOutput> {
+export function enhancedCargoCheck(
+  workspaceRoot: string,
+  targetFile: string
+): Promise<EnhancedOutput> {
   try {
     const native = getNativeModule();
     return native.enhanced_cargo_check(workspaceRoot, targetFile);
@@ -182,7 +223,10 @@ export function enhancedCargoCheck(workspaceRoot: string, targetFile: string): P
   }
 }
 
-export function suggestImportsForTypes(workspaceRoot: string, unresolvedTypes: string[]): Promise<string> {
+export function suggestImportsForTypes(
+  workspaceRoot: string,
+  unresolvedTypes: string[]
+): Promise<string> {
   try {
     const native = getNativeModule();
     return native.suggest_imports_for_types(workspaceRoot, unresolvedTypes);
@@ -201,7 +245,14 @@ export function extractFunctionWithTypes(
 ): Promise<ExtractionResult> {
   try {
     const native = getNativeModule();
-    return native.extract_function_with_types(filePath, startLine, startCol, endLine, endCol, functionName);
+    return native.extract_function_with_types(
+      filePath,
+      startLine,
+      startCol,
+      endLine,
+      endCol,
+      functionName
+    );
   } catch (e) {
     return Promise.reject(e);
   }
@@ -257,7 +308,9 @@ export function codetetherListModelsNative(): Promise<string[]> {
 export function greet(name: string): string {
   try {
     const native = getNativeModule();
-    return native.greet ? native.greet(name) : `Hello, ${name}! (native not loaded)`;
+    return native.greet
+      ? native.greet(name)
+      : `Hello, ${name}! (native not loaded)`;
   } catch (e) {
     return `Hello, ${name}! (native error: ${e})`;
   }
@@ -266,7 +319,9 @@ export function greet(name: string): string {
 export function analyzePlaceholder(p: string): string {
   try {
     const native = getNativeModule();
-    return native.analyze_placeholder ? native.analyze_placeholder(p) : `Analysis result for: ${p}`;
+    return native.analyze_placeholder
+      ? native.analyze_placeholder(p)
+      : `Analysis result for: ${p}`;
   } catch (e) {
     return `Analysis result for: ${p} (error: ${e})`;
   }
@@ -301,7 +356,11 @@ export function checkModuleConversion(
 ): Promise<ModuleConversionInfo> {
   try {
     const native = getNativeModule();
-    return native.check_module_conversion(workspaceRoot, targetPath, moduleName);
+    return native.check_module_conversion(
+      workspaceRoot,
+      targetPath,
+      moduleName
+    );
   } catch (e) {
     return Promise.reject(e);
   }
@@ -315,7 +374,11 @@ export function convertModuleToFolder(
 ): Promise<boolean> {
   try {
     const native = getNativeModule();
-    return native.convert_module_to_folder(existingFilePath, targetFolderPath, targetModFilePath);
+    return native.convert_module_to_folder(
+      existingFilePath,
+      targetFolderPath,
+      targetModFilePath
+    );
   } catch (e) {
     return Promise.reject(e);
   }
@@ -348,7 +411,10 @@ export function createCache(workspaceRoot: string): Promise<string> {
   }
 }
 
-export function getCachedAnalysis(workspaceRoot: string, filePath: string): Promise<string | null> {
+export function getCachedAnalysis(
+  workspaceRoot: string,
+  filePath: string
+): Promise<string | null> {
   try {
     const native = getNativeModule();
     return native.get_cached_analysis(workspaceRoot, filePath);
@@ -370,7 +436,9 @@ export function cacheAnalysis(
   }
 }
 
-export function getCacheStats(workspaceRoot: string): Promise<CacheStatsResult> {
+export function getCacheStats(
+  workspaceRoot: string
+): Promise<CacheStatsResult> {
   try {
     const native = getNativeModule();
     return native.get_cache_stats(workspaceRoot);

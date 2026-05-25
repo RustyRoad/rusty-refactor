@@ -9,6 +9,11 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { ChildProcess, spawn } from 'child_process';
+import { parseCodetetherRunOutput } from './codetetherRunOutput';
+import {
+    readCodetetherSessionToolEvents
+} from './codetetherSessionToolEvents';
+import { CodetetherToolEvent } from './codetetherToolEvents';
 import { logToOutput } from './extractor';
 
 const CODETETHER_HOSTNAME = '127.0.0.1';
@@ -30,6 +35,8 @@ export interface JsToolCall {
 export interface JsChatResponse {
     text?: string;
     tool_calls?: JsToolCall[];
+    tool_events?: CodetetherToolEvent[];
+    session_id?: string;
 }
 
 export interface JsToolDefinition {
@@ -539,6 +546,12 @@ export class CodetetherClient {
         return config.get<boolean>('useCodetether') || false;
     }
 
+    /**
+     * Sends chat messages through the configured Codetether transport.
+     *
+     * CLI fallback sends only the newest user prompt because `run -c` carries
+     * session context and Windows rejects oversized argv payloads.
+     */
     async chatCompletion(
         messages: ChatMessage[],
         options: {
@@ -564,10 +577,6 @@ export class CodetetherClient {
 
         const prompt = this.buildPrompt(messages);
 
-        if (transport === 'run') {
-            return this.runViaCli(workspaceFolder, model, prompt);
-        }
-
         if (options.tools && options.tools.length > 0) {
             logToOutput('[Codetether] A2A transport does not support extension-side tool callbacks; ignoring requested tools.');
         }
@@ -586,10 +595,14 @@ export class CodetetherClient {
             }
 
             logToOutput('[Codetether] A2A POST was forbidden by the local server; retrying with `codetether run`.');
-            return this.runViaCli(workspaceFolder, model, prompt);
+            const fallbackPrompt = this.lastUserMessage(messages);
+            return this.runViaCli(workspaceFolder, model, fallbackPrompt);
         }
     }
 
+    /**
+     * Chooses the chat transport from call options or workspace settings.
+     */
     private resolveChatTransport(preferCli?: boolean): CodetetherChatTransport {
         if (preferCli === true) {
             return 'run';
@@ -599,7 +612,9 @@ export class CodetetherClient {
         }
 
         const config = vscode.workspace.getConfiguration('rustyRefactor');
-        const configured = config.get<string>('codetetherChatTransport') || 'serve';
+        const configured = config.get<string>(
+            'codetetherChatTransport'
+        ) || 'run';
         return configured === 'run' ? 'run' : 'serve';
     }
 
@@ -609,20 +624,16 @@ export class CodetetherClient {
             && error.requestPath === '/a2a';
     }
 
+    /**
+     * Runs one chat request through the short-lived Codetether CLI transport.
+     */
     private async runViaCli(
         workspaceFolder: vscode.WorkspaceFolder,
         model: string,
         prompt: string
     ): Promise<JsChatResponse> {
         const env = buildWorkspaceEnv(workspaceFolder, crypto.randomBytes(12).toString('hex'), model);
-        const args = ['run'];
-
-        if (model) {
-            args.push('--model', model);
-        }
-
-        args.push('--format', 'json');
-        args.push(prompt);
+        const args = this.cliRunArgs(model, prompt);
 
         logToOutput(`[Codetether] Spawning CLI transport in ${workspaceFolder.uri.fsPath} with model ${model}`);
 
@@ -685,16 +696,49 @@ export class CodetetherClient {
                     return;
                 }
 
-                try {
-                    const parsed = JSON.parse(stdout.trim()) as {
-                        text?: string;
-                    };
-                    resolve({ text: (parsed.text ?? '').trim() });
-                } catch {
-                    resolve({ text: stdout.trim() });
-                }
+                void this.cliRunResponse(
+                    workspaceFolder.uri.fsPath,
+                    stdout
+                ).then(resolve, reject);
             });
         });
+    }
+
+    /**
+     * Builds the `codetether run -c` argv for one sidebar request.
+     *
+     * Continuing the session lets the extension send only the latest prompt
+     * while Codetether owns conversation state in its session store.
+     */
+    private cliRunArgs(model: string, prompt: string): string[] {
+        const args = ['run', '-c'];
+
+        if (model) {
+            args.push('--model', model);
+        }
+
+        args.push('--format', 'json', prompt);
+        return args;
+    }
+
+    /**
+     * Converts noisy CLI output into a response with completed tool events.
+     */
+    private async cliRunResponse(
+        workspacePath: string,
+        stdout: string
+    ): Promise<JsChatResponse> {
+        const output = parseCodetetherRunOutput(stdout);
+        const toolEvents = await readCodetetherSessionToolEvents(
+            workspacePath,
+            output.sessionId
+        );
+
+        return {
+            text: output.text,
+            session_id: output.sessionId,
+            tool_events: toolEvents
+        };
     }
 
     private buildPrompt(messages: ChatMessage[]): string {

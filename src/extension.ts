@@ -102,7 +102,7 @@ export function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine('✓ Codetether Chat Participant registered');
 
         // Register Codetether Sidebar View
-        const chatProvider = new CodetetherChatViewProvider(context.extensionUri);
+        const chatProvider = new CodetetherChatViewProvider(context);
         context.subscriptions.push(
             vscode.window.registerWebviewViewProvider(
                 CodetetherChatViewProvider.viewType,

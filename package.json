@@ -27,6 +27,7 @@
   ],
   "activationEvents": [
     "onLanguage:rust",
+    "onChatParticipant:rustyRefactor.codetether",
     "workspaceContains:**/Cargo.toml"
   ],
   "main": "./out/extension.js",
@@ -50,6 +51,15 @@
         }
       ]
     },
+    "chatParticipants": [
+      {
+        "id": "rustyRefactor.codetether",
+        "name": "codetether",
+        "fullName": "Codetether",
+        "description": "Ask Codetether to inspect, edit, and explain code.",
+        "isSticky": true
+      }
+    ],
     "commands": [
       {
         "command": "rustyRefactor.extractToModule",
@@ -371,17 +381,22 @@
         },
         "rustyRefactor.codetetherChatTransport": {
           "type": "string",
-          "default": "serve",
+          "default": "run",
           "enum": [
             "run",
             "serve"
           ],
-          "description": "Chat transport: 'run' spawns codetether per-request; 'serve' keeps a persistent A2A server."
+          "description": "Chat transport. Use 'run' for codetether run -c."
         },
         "rustyRefactor.codetetherA2AServerUrl": {
           "type": "string",
           "default": "",
           "description": "Optional URL of a remote Codetether A2A server to use for model discovery and chat (e.g. http://localhost:8000). Useful when port-forwarding a cluster-hosted a2a-server."
+        },
+        "rustyRefactor.ttsVoiceId": {
+          "type": "string",
+          "default": "",
+          "description": "Voice id for chat text-to-speech."
         }
       }
     }
@@ -390,12 +405,14 @@
     "vscode:prepublish": "npm run build",
     "build:napi": "cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml && node scripts/copy-napi.js",
     "build:rust": "cargo build --release --manifest-path rust-backend/Cargo.toml",
-    "build:ts": "rsbuild build",
+    "build:tether-chat": "node scripts/build-chat-state.js",
+    "build:ts": "npm run build:tether-chat && rsbuild build",
+    "build:test": "tsc -p ./tsconfig.test.json",
     "build": "npm run build:napi && npm run build:rust && npm run build:ts",
     "watch": "rsbuild build --watch",
     "watch:ts": "rsbuild build --watch",
     "dev": "rsbuild dev",
-    "pretest": "npm run build",
+    "pretest": "npm run build && npm run build:test",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
     "package": "vsce package",
@@ -405,12 +422,16 @@
   },
   "devDependencies": {
     "@types/node": "24.9.2",
+    "@types/mocha": "10.0.10",
     "@types/vscode": "1.105.0",
     "@vscode/vsce": "3.6.2",
+    "@vscode/test-electron": "2.5.2",
     "@typescript-eslint/eslint-plugin": "8.46.2",
     "@typescript-eslint/parser": "8.46.2",
     "@rsbuild/core": "1.6.0",
     "eslint": "9.39.0",
+    "glob": "11.0.3",
+    "mocha": "11.7.5",
     "typescript": "^5.0.4"
   },
   "dependencies": {}

@@ -245,6 +245,13 @@ export class AIDocGenerator {
         sourceFilePath: string,
         languageId: string,
     ): Promise<string | null> {
+        const testOverride =
+            this.getSelectionDocumentationTestOverride();
+
+        if (testOverride !== null) {
+            return testOverride;
+        }
+
         const prompt = this.buildSelectionDocumentationPrompt(
             moduleName,
             code,
@@ -288,6 +295,24 @@ export class AIDocGenerator {
             );
             return null;
         }
+    }
+
+    /**
+     * Returns a test-only documentation response override when configured.
+     *
+     * This keeps integration tests deterministic without changing runtime
+     * behavior for normal extension usage.
+     */
+    private getSelectionDocumentationTestOverride(): string | null {
+        const value = process.env.RUSTY_REFACTOR_TEST_DOC_RESPONSE;
+
+        if (!value) {
+            return null;
+        }
+
+        const cleaned = this.cleanMarkdownCodeBlocks(value);
+
+        return cleaned || null;
     }
 
     /**

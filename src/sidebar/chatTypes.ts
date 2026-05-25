@@ -3,7 +3,12 @@ import { ChatMessage } from '../codetetherClient';
 /**
  * Names the interaction style requested from Codetether for a message.
  */
-export type ChatMode = 'chat' | 'agent' | 'plan' | 'review';
+export type ChatMode =
+    | 'chat'
+    | 'agent'
+    | 'orchestrate'
+    | 'plan'
+    | 'review';
 
 /**
  * Names the tool preset requested from Codetether for a message.
@@ -29,6 +34,7 @@ export interface UserMessageRequest {
     mode?: ChatMode;
     feature?: CodetetherFeature;
     includeContext: boolean;
+    autoSpeak?: boolean;
 }
 
 /**
