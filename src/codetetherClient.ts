@@ -22,7 +22,7 @@ const CODETETHER_PORT_SCAN_LIMIT = 100;
 const CODETETHER_DEFAULT_MODEL = 'zai/glm-5';
 const SERVER_START_TIMEOUT_MS = 15000;
 const MODEL_LIST_TIMEOUT_MS = 15000;
-const CODETETHER_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+const CODETETHER_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const HEALTH_POLL_INTERVAL_MS = 250;
 
 export interface JsToolCall {
@@ -834,18 +834,6 @@ export class CodetetherClient {
         return baseEnv;
     }
 
-    private getModelListFallbacks(): string[] {
-        return [
-            this.defaultModel,
-            process.env.CODETETHER_DEFAULT_MODEL,
-            CODETETHER_DEFAULT_MODEL,
-            'zai/glm-5.1',
-            'openai-codex/gpt-5.1-codex-max',
-            'anthropic/claude-sonnet-4-5-20250929',
-            'google/gemini-3-pro-preview'
-        ].filter((model): model is string => Boolean(model && model.trim()));
-    }
-
     private mergeModelLists(...groups: string[][]): string[] {
         return [...new Set(groups.flat().map(model => model.trim()).filter(Boolean))].sort();
     }
@@ -1125,7 +1113,6 @@ export class CodetetherClient {
 
     async listModels(): Promise<string[]> {
         this.refreshConfig();
-        const fallbackModels = this.getModelListFallbacks();
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const cwd = workspaceFolder?.uri.fsPath;
         const env = this.buildModelListEnv(workspaceFolder);
@@ -1173,13 +1160,10 @@ export class CodetetherClient {
             }
         }
 
-        groups.push(fallbackModels);
         const merged = this.mergeModelLists(...groups);
         logToOutput(
             `[Codetether] Model discovery final result:` +
-            ` ${merged.length} models` +
-            ` (${fallbackModels.length} built-in/configured` +
-            ` fallbacks included).`
+            ` ${merged.length} models from the Codetether CLI.`
         );
         return merged;
     }

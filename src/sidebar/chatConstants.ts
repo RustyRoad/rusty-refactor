@@ -19,11 +19,6 @@ export const MODEL_SLOW_STATUS_MS = 6000;
 export const WORKSPACE_CONTEXT_LIMIT = 12000;
 
 /**
- * Lists built-in fallback models that remain available without discovery.
- */
-export const BUILT_IN_MODELS = ['zai/glm-5', 'zai/glm-5.1'];
-
-/**
  * Enumerates accepted chat modes for validation and webview controls.
  */
 export const CHAT_MODES: ChatMode[] = [

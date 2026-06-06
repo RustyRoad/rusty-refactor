@@ -2,10 +2,7 @@ import * as vscode from 'vscode';
 
 import { CodetetherClient } from '../codetetherClient';
 import { logToOutput } from '../extractor';
-import {
-    BUILT_IN_MODELS,
-    MODEL_SLOW_STATUS_MS
-} from './chatConstants';
+import { MODEL_SLOW_STATUS_MS } from './chatConstants';
 import { ModelListPayload } from './chatTypes';
 
 /**
@@ -17,7 +14,13 @@ export class ModelListService {
     public constructor(private readonly client: CodetetherClient) {}
 
     /**
-     * Refreshes the model list and streams safe initial states to the view.
+     * Refreshes the model list and streams progress to the view.
+     *
+     * Models are sourced exclusively from the Codetether CLI's `models`
+     * endpoint via {@link CodetetherClient.listModels}. The configured
+     * default model is reported alongside the discovered list so the
+     * webview can surface it as the dropdown's automatic choice, but no
+     * built-in defaults are seeded before the CLI responds.
      */
     public async sendModelsList(
         view: vscode.WebviewView | undefined
@@ -28,18 +31,12 @@ export class ModelListService {
 
         const requestId = ++this.requestId;
         const configuredModel = this.getConfiguredModel();
-        const initialModels = this.mergeModels(
-            this.optionalModelGroup(configuredModel),
-            BUILT_IN_MODELS
-        );
+        const initialModels = this.optionalModelGroup(configuredModel);
 
         this.postModels(view, requestId, {
             models: initialModels,
             configuredModel,
-            status: [
-                'Built-in/manual models are ready.',
-                'Discovering Codetether models…'
-            ].join(' ')
+            status: 'Discovering Codetether models…'
         });
         logToOutput('[Codetether Chat] Starting model discovery.');
 
@@ -73,7 +70,11 @@ export class ModelListService {
     }
 
     /**
-     * Loads configured and discovered models with slow-load status handling.
+     * Loads discovered models with slow-load status handling.
+     *
+     * Once the CLI responds, the configured default is prepended to the
+     * list (when not already present) so it remains selectable as the
+     * automatic choice in the webview.
      */
     private async discoverModels(
         view: vscode.WebviewView,
@@ -140,7 +141,7 @@ export class ModelListService {
         this.postModels(view, requestId, {
             models: initialModels,
             configuredModel,
-            status: `${message} Built-in/manual models remain usable.`
+            status: `${message} The Codetether CLI did not return any models.`
         });
     }
 
