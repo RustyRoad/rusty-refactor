@@ -27,6 +27,7 @@ const sessionIdInput = byId('session-id-input');
 const sessionIdOpenButton = byId('open-session-id-btn');
 const subagentPanel = byId('subagent-panel');
 const subagentSummary = byId('subagent-summary');
+const subagentCounters = byId('subagent-counters');
 const subagentList = byId('subagent-list');
 const voiceInput = byId('voice-input');
 const voiceSourceInput = byId('voice-source-input');

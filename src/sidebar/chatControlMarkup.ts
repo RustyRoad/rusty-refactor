@@ -54,8 +54,13 @@ export class ChatControlMarkup {
             ' aria-label="Sub-agent activity" aria-live="polite">',
             '<div class="subagent-panel-header">',
             '<span class="subagent-panel-title">Sub-agents</span>',
+            '<div class="subagent-panel-actions">',
             '<span id="subagent-summary" class="subagent-summary"></span>',
+            '<button id="refresh-subagents-btn"',
+            ' title="Refresh sub-agent activity">Refresh</button>',
             '</div>',
+            '</div>',
+            '<div id="subagent-counters" class="subagent-counters"></div>',
             '<div id="subagent-list" class="subagent-list"></div>',
             '</section>',
         ].join('\n');

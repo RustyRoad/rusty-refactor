@@ -15,6 +15,7 @@ function bootChatSidebar() {
     byId('tui-btn').onclick = openTui;
     byId('refresh-btn').onclick = refreshModels;
     byId('refresh-sessions-btn').onclick = refreshSessions;
+    byId('refresh-subagents-btn').onclick = refreshSubagents;
     sessionIdOpenButton.onclick = openSessionByEnteredId;
     sessionIdInput.addEventListener('keydown', handleSessionIdKeydown);
     byId('save-model-btn').onclick = saveSelectedModel;

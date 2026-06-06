@@ -20,6 +20,27 @@ interface SessionSummary {
     messages?: unknown;
 }
 
+interface TaskRecord {
+    kind?: unknown;
+    at?: unknown;
+    objective?: unknown;
+    success_criteria?: unknown;
+    id?: unknown;
+    status?: unknown;
+    note?: unknown;
+}
+
+interface LedgerFile {
+    session_id?: unknown;
+    items?: unknown;
+    evidence?: unknown;
+}
+
+interface LedgerItem {
+    deliverable?: unknown;
+    status?: unknown;
+}
+
 /**
  * Receives the latest active sub-agent rows from the monitor.
  */
@@ -66,6 +87,13 @@ export class SubagentSessionMonitor {
     }
 
     /**
+     * Reads one activity snapshot without changing the polling lifecycle.
+     */
+    public snapshot(): Promise<CodetetherSubagentActivity[]> {
+        return this.readActivities();
+    }
+
+    /**
      * Reads current sub-agent sessions and emits changes to the sink.
      */
     private async poll(): Promise<void> {
@@ -101,8 +129,13 @@ export class SubagentSessionMonitor {
             }
         }
 
+        rows.push(...await this.taskActivities(directory, entries));
+        rows.push(...await this.ledgerActivities());
+        rows.push(...await this.memoryActivities());
+
         return rows.sort((left, right) => {
-            return left.name.localeCompare(right.name);
+            return right.updatedAt.localeCompare(left.updatedAt)
+                || left.name.localeCompare(right.name);
         });
     }
 
@@ -134,9 +167,188 @@ export class SubagentSessionMonitor {
             name: agent,
             status: 'running',
             detail: this.sessionDetail(session),
+            source: 'session',
             model: this.sessionModel(session) || undefined,
             sessionId: this.sessionId(session, entry),
             updatedAt: this.sessionUpdatedAt(session, stat.mtime)
+        };
+    }
+
+    /**
+     * Converts task journals into goal and status activity rows.
+     */
+    private async taskActivities(
+        directory: string,
+        entries: string[]
+    ): Promise<CodetetherSubagentActivity[]> {
+        const rows: CodetetherSubagentActivity[] = [];
+        for (const entry of entries) {
+            if (!entry.endsWith('.tasks.jsonl')) {
+                continue;
+            }
+
+            const row = await this.taskActivity(directory, entry);
+            if (row) {
+                rows.push(row);
+            }
+        }
+
+        return rows;
+    }
+
+    /**
+     * Converts one task journal into a compact activity row.
+     */
+    private async taskActivity(
+        directory: string,
+        entry: string
+    ): Promise<CodetetherSubagentActivity | undefined> {
+        const filePath = path.join(directory, entry);
+        const stat = await this.safeStat(filePath);
+        if (!stat || stat.mtimeMs < this.lookbackStart()) {
+            return undefined;
+        }
+
+        const records = await this.safeReadJsonLines<TaskRecord>(filePath);
+        if (records.length === 0) {
+            return undefined;
+        }
+
+        const sessionId = entry.replace(/\.tasks\.jsonl$/, '');
+        const latest = records[records.length - 1];
+        const objective = this.taskObjective(records);
+        return {
+            id: `tasks-${sessionId}`,
+            name: 'Task journal',
+            status: this.taskStatus(latest),
+            detail: objective || this.stringValue(latest.note),
+            source: 'tasks',
+            taskCount: records.length,
+            doneCount: this.doneTaskCount(records),
+            sessionId,
+            updatedAt: this.timeValue(latest.at, stat.mtime)
+        };
+    }
+
+    /**
+     * Converts local Codetether ledgers into activity rows.
+     */
+    private async ledgerActivities(): Promise<CodetetherSubagentActivity[]> {
+        const directory = path.join(
+            this.workspacePath,
+            '.codetether',
+            'session-ledgers'
+        );
+        const entries = await this.safeReadDirectory(directory);
+        const rows: CodetetherSubagentActivity[] = [];
+
+        for (const entry of entries) {
+            const row = await this.ledgerActivity(directory, entry);
+            if (row) {
+                rows.push(row);
+            }
+        }
+
+        return rows;
+    }
+
+    /**
+     * Converts one ledger file into a deliverable summary row.
+     */
+    private async ledgerActivity(
+        directory: string,
+        entry: string
+    ): Promise<CodetetherSubagentActivity | undefined> {
+        if (!entry.endsWith('.json')) {
+            return undefined;
+        }
+
+        const filePath = path.join(directory, entry);
+        const stat = await this.safeStat(filePath);
+        if (!stat || stat.mtimeMs < this.lookbackStart()) {
+            return undefined;
+        }
+
+        const ledger = await this.safeReadJson<LedgerFile>(filePath);
+        const items = Array.isArray(ledger?.items) ? ledger.items : [];
+        const blocked = items.filter(item => {
+            return this.itemStatus(item) === 'blocked';
+        }).length;
+        const done = items.filter(item => {
+            return this.itemStatus(item) === 'done';
+        }).length;
+        const first = items[0] as LedgerItem | undefined;
+        const sessionId = this.stringValue(ledger?.session_id)
+            || entry.replace(/\.json$/, '');
+
+        return {
+            id: `ledger-${sessionId}`,
+            name: 'Session ledger',
+            status: blocked > 0 ? 'failed' : 'running',
+            detail: this.summarize(
+                this.stringValue(first?.deliverable)
+                    || 'Codetether deliverable ledger updated.'
+            ),
+            source: 'ledger',
+            taskCount: items.length,
+            doneCount: done,
+            blockedCount: blocked,
+            evidenceCount: this.evidenceCount(ledger),
+            sessionId,
+            updatedAt: stat.mtime.toISOString()
+        };
+    }
+
+    /**
+     * Converts memory writeback files into evidence activity rows.
+     */
+    private async memoryActivities(): Promise<CodetetherSubagentActivity[]> {
+        const directory = path.join(
+            this.workspacePath,
+            '.codetether',
+            'memory-writeback'
+        );
+        const entries = await this.safeReadDirectory(directory);
+        const rows: CodetetherSubagentActivity[] = [];
+
+        for (const entry of entries) {
+            const row = await this.memoryActivity(directory, entry);
+            if (row) {
+                rows.push(row);
+            }
+        }
+
+        return rows;
+    }
+
+    /**
+     * Converts one memory file into an evidence summary row.
+     */
+    private async memoryActivity(
+        directory: string,
+        entry: string
+    ): Promise<CodetetherSubagentActivity | undefined> {
+        if (!entry.endsWith('.json')) {
+            return undefined;
+        }
+
+        const filePath = path.join(directory, entry);
+        const stat = await this.safeStat(filePath);
+        if (!stat || stat.mtimeMs < this.lookbackStart()) {
+            return undefined;
+        }
+
+        const evidence = await this.safeReadJson<unknown[]>(filePath);
+        const sessionId = entry.replace(/\.json$/, '');
+        return {
+            id: `memory-${sessionId}`,
+            name: 'Memory writeback',
+            status: 'completed',
+            detail: 'Local Codetether memory evidence was persisted.',
+            source: 'memory',
+            evidenceCount: Array.isArray(evidence) ? evidence.length : 0,
+            sessionId,
+            updatedAt: stat.mtime.toISOString()
         };
     }
 
@@ -161,6 +373,45 @@ export class SubagentSessionMonitor {
             return await fs.stat(filePath);
         } catch {
             return undefined;
+        }
+    }
+
+    /**
+     * Reads directory names and hides missing local Codetether folders.
+     */
+    private async safeReadDirectory(directory: string): Promise<string[]> {
+        try {
+            return await fs.readdir(directory);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Reads JSON and returns undefined when a file is unavailable.
+     */
+    private async safeReadJson<T>(filePath: string): Promise<T | undefined> {
+        try {
+            const raw = await fs.readFile(filePath, 'utf8');
+            return JSON.parse(raw) as T;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Reads newline-delimited JSON records from a local file.
+     */
+    private async safeReadJsonLines<T>(filePath: string): Promise<T[]> {
+        try {
+            const raw = await fs.readFile(filePath, 'utf8');
+            return raw
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(Boolean)
+                .map(line => JSON.parse(line) as T);
+        } catch {
+            return [];
         }
     }
 
@@ -248,6 +499,83 @@ export class SubagentSessionMonitor {
         }
 
         return fallback.toISOString();
+    }
+
+    /**
+     * Returns a permissive local activity lookback window.
+     */
+    private lookbackStart(): number {
+        return this.startedAt - (60 * 60 * 1000);
+    }
+
+    /**
+     * Returns a task journal's latest explicit status.
+     */
+    private taskStatus(record: TaskRecord): CodetetherSubagentActivity[
+        'status'
+    ] {
+        const status = this.stringValue(record.status).toLowerCase();
+        if (status === 'done' || status === 'completed') {
+            return 'completed';
+        }
+        if (status === 'failed' || status === 'blocked') {
+            return 'failed';
+        }
+
+        return 'running';
+    }
+
+    /**
+     * Returns the latest objective recorded in a task journal.
+     */
+    private taskObjective(records: TaskRecord[]): string {
+        for (let index = records.length - 1; index >= 0; index--) {
+            const objective = this.stringValue(records[index].objective);
+            if (objective) {
+                return this.summarize(objective);
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Counts completed status records in a task journal.
+     */
+    private doneTaskCount(records: TaskRecord[]): number {
+        return records.filter(record => {
+            const status = this.stringValue(record.status).toLowerCase();
+            return status === 'done' || status === 'completed';
+        }).length;
+    }
+
+    /**
+     * Returns the status string from an arbitrary ledger item.
+     */
+    private itemStatus(item: unknown): string {
+        const value = item as LedgerItem;
+        return this.stringValue(value.status).toLowerCase();
+    }
+
+    /**
+     * Counts evidence entries attached to a ledger file.
+     */
+    private evidenceCount(ledger: LedgerFile | undefined): number {
+        return Array.isArray(ledger?.evidence) ? ledger.evidence.length : 0;
+    }
+
+    /**
+     * Converts unknown values to strings for local activity display.
+     */
+    private stringValue(value: unknown): string {
+        return typeof value === 'string' ? value.trim() : '';
+    }
+
+    /**
+     * Returns a timestamp from a record field or filesystem fallback.
+     */
+    private timeValue(value: unknown, fallback: Date): string {
+        return typeof value === 'string' ? value : fallback.toISOString();
     }
 
     /**

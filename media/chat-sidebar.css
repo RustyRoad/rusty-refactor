@@ -341,7 +341,7 @@ button:disabled {
 .subagent-panel {
     display: none;
     flex: 0 0 auto;
-    max-height: 145px;
+    max-height: 260px;
     overflow-y: auto;
     padding: 8px 10px;
     border-top: 1px solid var(--vscode-panel-border);
@@ -360,6 +360,18 @@ button:disabled {
     margin-bottom: 6px;
 }
 
+.subagent-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.subagent-panel-actions button,
+.subagent-action {
+    padding: 2px 6px;
+    font-size: 10px;
+}
+
 .subagent-panel-title {
     font-size: 11px;
     font-weight: 700;
@@ -369,6 +381,22 @@ button:disabled {
 .subagent-meta {
     color: var(--vscode-descriptionForeground);
     font-size: 10px;
+}
+
+.subagent-counters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.subagent-counter,
+.subagent-badge {
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+    padding: 1px 6px;
 }
 
 .subagent-list {
@@ -420,6 +448,14 @@ button:disabled {
 .subagent-name {
     font-size: 12px;
     font-weight: 600;
+}
+
+.subagent-badges,
+.subagent-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
 }
 
 .copy-btn,

@@ -18,6 +18,11 @@ export interface CodetetherSubagentActivity {
     status: CodetetherSubagentStatus;
     detail: string;
     updatedAt: string;
+    source: string;
+    taskCount?: number;
+    doneCount?: number;
+    blockedCount?: number;
+    evidenceCount?: number;
     model?: string;
     sessionId?: string;
 }
@@ -31,6 +36,7 @@ export function coordinatorSubagentActivity(): CodetetherSubagentActivity {
         name: 'Coordinator',
         status: 'running',
         detail: 'Watching Codetether sub-agent activity.',
+        source: 'coordinator',
         updatedAt: new Date().toISOString()
     };
 }
@@ -64,6 +70,17 @@ export function subagentSummary(
     rows: CodetetherSubagentActivity[]
 ): string {
     const count = rows.filter(row => row.id !== 'coordinator').length;
+    const running = rows.filter(row => row.status === 'running').length;
+    const blocked = rows.reduce((total, row) => {
+        return total + (row.blockedCount || 0);
+    }, 0);
+
+    if (blocked > 0) {
+        return `${count} tracked | ${blocked} blocked`;
+    }
+    if (running > 0 && count > 0) {
+        return `${count} tracked | ${running} running`;
+    }
     if (count === 0 && rows.length > 0) {
         return 'coordinating';
     }
@@ -167,6 +184,7 @@ function activityFromToolCall(
         name: activityName(toolName, args),
         status: 'running',
         detail: activityDetail(toolName, args),
+        source: toolName || 'tool',
         model: stringField(args, 'model') || undefined,
         updatedAt: new Date().toISOString()
     };
