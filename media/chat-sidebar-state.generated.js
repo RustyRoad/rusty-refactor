@@ -10,6 +10,7 @@
   "actions": [
     "appendMessage",
     "clearChat",
+    "clearMessages",
     "hostMessageReceived",
     "modelsListed",
     "sessionsListed",
@@ -270,6 +271,12 @@
                 return appendMessage(current, value);
             case 'clearChat':
                 return createInitialState();
+            case 'clearMessages':
+                return withUpdate(current, {
+                    messages: [],
+                    speakingMessageId: '',
+                    toolEventCount: 0,
+                });
             case 'hostMessageReceived':
                 return withUpdate(current, {
                     lastHostMessageType: value.type || '',

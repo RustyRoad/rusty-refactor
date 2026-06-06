@@ -13,6 +13,7 @@ import { CodetetherToolEvent } from '../codetetherToolEvents';
 import { logToOutput } from '../extractor';
 import { AgentPromptBuilder } from './agentPromptBuilder';
 import { CHAT_SYSTEM_PROMPT } from './chatConstants';
+import { CodetetherSessionOpenService } from './codetetherSessionOpenService';
 import {
     ChatSpeechService,
     ChatSpeechVoice
@@ -50,6 +51,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     private readonly client: CodetetherClient;
     private readonly modelListService: ModelListService;
     private readonly sessionService: CodetetherSessionService;
+    private readonly sessionOpenService: CodetetherSessionOpenService;
     private readonly promptBuilder: AgentPromptBuilder;
     private readonly htmlRenderer: ChatWebviewHtml;
     private readonly speechService: ChatSpeechService;
@@ -68,6 +70,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
         this.client = new CodetetherClient();
         this.modelListService = new ModelListService(this.client);
         this.sessionService = new CodetetherSessionService();
+        this.sessionOpenService = new CodetetherSessionOpenService();
         this.promptBuilder = new AgentPromptBuilder();
         this.htmlRenderer = new ChatWebviewHtml();
         this.speechService = new ChatSpeechService(
@@ -171,6 +174,9 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
                 return;
             case 'refreshSessions':
                 await this.sendSessionsList();
+                return;
+            case 'refreshSubagents':
+                await this.refreshSubagentActivities();
                 return;
             case 'openSession':
                 await this.openSession(
@@ -453,48 +459,42 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Opens a Codetether session folder after validating the webview path.
+     * Loads a Codetether session transcript into the current chat view.
      */
     private async openSession(
         sessionPath: string,
         sessionId = ''
     ): Promise<void> {
-        const sessions = await this.sessionService.listRecentSessions(200);
-        const session = sessions.find(item => {
-            return item.path === sessionPath || item.id === sessionId;
-        });
-        if (!session) {
-            this.postStatus('Session not found.', false);
-            return;
-        }
-
-        await this.openSessionSummary(session);
+        const result = await this.sessionOpenService.openSelected(
+            sessionPath,
+            sessionId,
+            this.view
+        );
+        this.applySessionOpenResult(result);
     }
 
     /**
-     * Opens a Codetether session folder by id from the shell TUI.
+     * Loads a Codetether session transcript by id from the shell TUI.
      */
     private async openSessionById(sessionId: string): Promise<void> {
-        const session = await this.sessionService.findSessionById(sessionId);
-        if (!session) {
-            this.postStatus(`Session not found: ${sessionId}`, false);
-            return;
-        }
-
-        await this.openSessionSummary(session);
+        const result = await this.sessionOpenService.openById(
+            sessionId,
+            this.view
+        );
+        this.applySessionOpenResult(result);
     }
 
     /**
-     * Opens the folder that stores one persisted Codetether session.
+     * Applies a session-load result to provider history and status text.
      */
-    private async openSessionSummary(
-        session: { path: string }
-    ): Promise<void> {
-        await vscode.commands.executeCommand(
-            'vscode.openFolder',
-            vscode.Uri.file(session.path),
-            { forceNewWindow: true }
-        );
+    private applySessionOpenResult(result: {
+        history?: ChatHistory;
+        status: string;
+    }): void {
+        if (result.history) {
+            this.chatHistory = result.history;
+        }
+        this.postStatus(result.status, false);
     }
 
     /**
@@ -687,6 +687,23 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
             activities
         );
         this.postSubagentActivities(this.subagentActivities);
+    }
+
+    /**
+     * Refreshes the sub-agent panel from local Codetether activity files.
+     */
+    private async refreshSubagentActivities(): Promise<void> {
+        const workspacePath = this.workspacePathForSubagentMonitor();
+        if (!workspacePath) {
+            this.postStatus('Open a workspace to refresh sub-agents.', false);
+            return;
+        }
+
+        const monitor = this.subagentMonitor
+            || new SubagentSessionMonitor(workspacePath, () => {});
+        const activities = await monitor.snapshot();
+        this.mergeAndPostSubagentActivities(activities);
+        this.postStatus('Sub-agent activity refreshed.', false);
     }
 
     /**

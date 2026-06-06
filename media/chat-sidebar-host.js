@@ -155,6 +155,9 @@ function handleHostMessage(event) {
         case 'sessionsListed':
             handleSessionsListedMessage(message);
             break;
+        case 'sessionLoaded':
+            handleSessionLoadedMessage(message);
+            break;
         case 'subagentsChanged':
             handleSubagentsChangedMessage(message);
             break;
