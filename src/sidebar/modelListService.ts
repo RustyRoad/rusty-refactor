@@ -1,9 +1,19 @@
 import * as vscode from 'vscode';
 
 import { CodetetherClient } from '../codetetherClient';
+import {
+    CodeTetherApiError,
+    CodeTetherDiscoveryTelemetry
+} from '../codeTetherApiClient';
 import { logToOutput } from '../extractor';
 import { MODEL_SLOW_STATUS_MS } from './chatConstants';
 import { ModelListPayload } from './chatTypes';
+
+interface SidebarModelDiscovery {
+    models: string[];
+    status?: string;
+    telemetry: CodeTetherDiscoveryTelemetry;
+}
 
 /**
  * Sends model-listing updates while keeping stale async results isolated.
@@ -16,11 +26,9 @@ export class ModelListService {
     /**
      * Refreshes the model list and streams progress to the view.
      *
-     * Models are sourced exclusively from the Codetether CLI's `models`
-     * endpoint via {@link CodetetherClient.listModels}. The configured
-     * default model is reported alongside the discovered list so the
-     * webview can surface it as the dropdown's automatic choice, but no
-     * built-in defaults are seeded before the CLI responds.
+     * Models are sourced from CodeTether's server-side HTTP model endpoint.
+     * VS Code language models remain a fallback when CodeTether is not
+     * configured or the HTTP endpoint is unavailable.
      */
     public async sendModelsList(
         view: vscode.WebviewView | undefined
@@ -36,12 +44,16 @@ export class ModelListService {
         this.postModels(view, requestId, {
             models: initialModels,
             configuredModel,
-            status: 'Discovering Codetether models…'
+            status: 'Discovering CodeTether models...'
         });
         logToOutput('[Codetether Chat] Starting model discovery.');
 
-        await this.discoverModels(view, requestId, configuredModel,
-            initialModels);
+        await this.discoverModels(
+            view,
+            requestId,
+            configuredModel,
+            initialModels,
+        );
     }
 
     /**
@@ -72,9 +84,8 @@ export class ModelListService {
     /**
      * Loads discovered models with slow-load status handling.
      *
-     * Once the CLI responds, the configured default is prepended to the
-     * list (when not already present) so it remains selectable as the
-     * automatic choice in the webview.
+     * Once discovery responds, the configured default is prepended to the
+     * list when not already present so it remains selectable as automatic.
      */
     private async discoverModels(
         view: vscode.WebviewView,
@@ -87,37 +98,201 @@ export class ModelListService {
         try {
             slowTimer = setTimeout(() => {
                 this.postStatus(view, requestId, [
-                    'Still loading Codetether models…',
+                    'Still loading CodeTether models...',
                     'you can use a listed or custom model now.'
                 ].join(' '));
             }, MODEL_SLOW_STATUS_MS);
 
-            const models = await this.client.listModels();
+            const discovery = await this.discoverModelIds();
             this.clearTimer(slowTimer);
 
             if (!this.isCurrent(requestId)) {
                 return;
             }
 
-            const mergedModels = this.mergeModels(
-                this.optionalModelGroup(configuredModel),
-                models,
-                initialModels
-            );
+            const models = discovery.telemetry.fallbackUsed
+                ? this.mergeModels(
+                    this.optionalModelGroup(configuredModel),
+                    discovery.models,
+                    initialModels
+                )
+                : discovery.models;
+            const telemetry = {
+                ...discovery.telemetry,
+                shownModelCount: models.length,
+                providerCounts: this.providerCounts(models)
+            };
+            this.logDiscoveryTelemetry(telemetry);
             logToOutput([
                 '[Codetether Chat] Model discovery completed:',
-                `${models.length} discovered,`,
-                `${mergedModels.length} shown.`
+                `${discovery.models.length} discovered,`,
+                `${models.length} shown.`
             ].join(' '));
             this.postModels(view, requestId, {
-                models: mergedModels,
-                configuredModel
+                models,
+                configuredModel,
+                status: discovery.status,
+                discoveryTelemetry: telemetry
             });
         } catch (err) {
             this.clearTimer(slowTimer);
-            this.handleDiscoveryError(view, requestId, configuredModel,
-                initialModels, err);
+            this.handleDiscoveryError(
+                view,
+                requestId,
+                configuredModel,
+                initialModels,
+                err,
+            );
         }
+    }
+
+    /**
+     * Discovers CodeTether model IDs and falls back to VS Code LM IDs.
+     */
+    private async discoverModelIds(): Promise<SidebarModelDiscovery> {
+        try {
+            const discovery = await this.client.discoverModelPickerItems();
+            const models = discovery.items.map(item => item.modelId);
+
+            return {
+                models,
+                telemetry: {
+                    ...discovery.telemetry,
+                    shownModelCount: models.length,
+                    providerCounts: this.providerCounts(models)
+                }
+            };
+        } catch (error) {
+            this.showCodeTetherFailure(error);
+            const fallbackModels = await this.listVSCodeModelIds();
+            return {
+                models: fallbackModels,
+                status: this.fallbackStatus(error),
+                telemetry: {
+                    discoverySource: 'vscode-lm',
+                    serverUrl: this.safeServerUrlHint(),
+                    httpStatus: this.errorStatus(error),
+                    rawModelCount: fallbackModels.length,
+                    shownModelCount: fallbackModels.length,
+                    providerCounts: this.providerCounts(fallbackModels),
+                    fallbackUsed: true
+                }
+            };
+        }
+    }
+
+    /**
+     * Lists VS Code language model ids as provider/family strings.
+     */
+    private async listVSCodeModelIds(): Promise<string[]> {
+        try {
+            const models = await vscode.lm.selectChatModels();
+            return models.map(model => `${model.vendor}/${model.family}`);
+        } catch (error) {
+            const message = error instanceof Error
+                ? error.message
+                : String(error);
+            logToOutput(
+                `[Codetether Chat] VS Code fallback model` +
+                ` discovery failed: ${message}`
+            );
+            return [];
+        }
+    }
+
+    /**
+     * Counts model IDs by provider prefix without renaming providers.
+     */
+    private providerCounts(models: string[]): Record<string, number> {
+        return models.reduce<Record<string, number>>((counts, model) => {
+            const provider = model.split('/')[0] || 'other';
+            counts[provider] = (counts[provider] || 0) + 1;
+            return counts;
+        }, {});
+    }
+
+    /**
+     * Emits structured discovery telemetry to the extension output log.
+     */
+    private logDiscoveryTelemetry(
+        telemetry: Record<string, unknown>
+    ): void {
+        logToOutput(
+            '[Codetether Chat] Model discovery telemetry: ' +
+            JSON.stringify(telemetry)
+        );
+    }
+
+    /**
+     * Builds a token-free status message for fallback discovery.
+     */
+    private fallbackStatus(error: unknown): string {
+        if (error instanceof CodeTetherApiError) {
+            if (error.kind === 'auth') {
+                return 'CodeTether token missing/wrong; using VS Code models.';
+            }
+            if (error.kind === 'policy') {
+                return [
+                    'CodeTether policy denied agent:read;',
+                    'using VS Code models.'
+                ].join(' ');
+            }
+            if (error.kind === 'network' || error.kind === 'timeout') {
+                return 'CodeTether server unavailable; using VS Code models.';
+            }
+        }
+
+        return 'CodeTether discovery failed; using VS Code models.';
+    }
+
+    /**
+     * Shows the actionable CodeTether discovery failure once per refresh.
+     */
+    private showCodeTetherFailure(error: unknown): void {
+        if (!(error instanceof CodeTetherApiError)) {
+            return;
+        }
+
+        if (error.kind === 'auth') {
+            vscode.window.showWarningMessage(
+                'CodeTether token missing/wrong. Configure CODETETHER_TOKEN.'
+            );
+        } else if (error.kind === 'policy') {
+            vscode.window.showWarningMessage(
+                'CodeTether policy denied agent:read. Check OPA permissions.'
+            );
+        }
+    }
+
+    /**
+     * Returns a non-secret server URL hint for discovery telemetry.
+     */
+    private safeServerUrlHint(): string {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+
+        const rawUrl = config.get<string>('codeTether.serverUrl') ||
+            process.env.CODETETHER_SERVER ||
+            config.get<string>('codetetherServer') ||
+            config.get<string>('codetetherA2AServerUrl') ||
+            '';
+
+        try {
+            const parsed = new URL(rawUrl);
+            return parsed.origin + parsed.pathname.replace(/\/$/, '');
+        } catch {
+            return rawUrl.split('?')[0].replace(/\/$/, '');
+        }
+    }
+
+    /**
+     * Returns HTTP status or error kind for discovery telemetry.
+     */
+    private errorStatus(error: unknown): number | string {
+        if (error instanceof CodeTetherApiError) {
+            return error.statusCode ?? error.kind;
+        }
+
+        return 'unknown';
     }
 
     /**
@@ -141,7 +316,7 @@ export class ModelListService {
         this.postModels(view, requestId, {
             models: initialModels,
             configuredModel,
-            status: `${message} The Codetether CLI did not return any models.`
+            status: `${message} Falling back to configured/custom models.`
         });
     }
 
@@ -177,7 +352,8 @@ export class ModelListService {
             type: 'modelsListed',
             models: payload.models,
             configuredModel: payload.configuredModel,
-            status: payload.status
+            status: payload.status,
+            discoveryTelemetry: payload.discoveryTelemetry
         });
     }
 

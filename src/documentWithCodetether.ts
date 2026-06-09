@@ -4,26 +4,30 @@ import * as vscode from 'vscode';
 import { AIDocGenerator } from './aiDocGenerator';
 import { logToOutput } from './extractor';
 
+interface DocumentTarget {
+    editor: vscode.TextEditor;
+    range: vscode.Range;
+}
+
 /**
  * Documents the active code selection with Codetether and replaces it in the
  * editor when generation succeeds.
  */
-export async function handleDocumentWithCodetether(): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        void vscode.window.showErrorMessage('No active editor found.');
-        return;
-    }
-
-    if (editor.selection.isEmpty) {
+export async function handleDocumentWithCodetether(
+    secretStorage?: vscode.SecretStorage,
+    uri?: vscode.Uri,
+    range?: vscode.Range
+): Promise<void> {
+    const target = await resolveDocumentTarget(uri, range);
+    if (!target) {
         void vscode.window.showErrorMessage(
             'Select the code you want Codetether to document.',
         );
         return;
     }
 
-    const selection = editor.selection;
-    const selectedCode = editor.document.getText(selection);
+    const { editor } = target;
+    const selectedCode = editor.document.getText(target.range);
     const languageId = editor.document.languageId;
     if (!selectedCode.trim()) {
         void vscode.window.showErrorMessage(
@@ -32,7 +36,7 @@ export async function handleDocumentWithCodetether(): Promise<void> {
         return;
     }
 
-    const generator = new AIDocGenerator();
+    const generator = new AIDocGenerator(secretStorage);
     const moduleName = inferModuleName(editor.document);
 
     logToOutput(
@@ -62,7 +66,7 @@ export async function handleDocumentWithCodetether(): Promise<void> {
     }
 
     const didApply = await editor.edit((editBuilder) => {
-        editBuilder.replace(selection, documented);
+        editBuilder.replace(target.range, documented);
     });
 
     if (!didApply) {
@@ -76,6 +80,67 @@ export async function handleDocumentWithCodetether(): Promise<void> {
     void vscode.window.showInformationMessage(
         'Codetether documentation added to the selected code.',
     );
+}
+
+/**
+ * Resolves the editor and range supplied by a command or context menu.
+ */
+async function resolveDocumentTarget(
+    uri?: vscode.Uri,
+    range?: vscode.Range
+): Promise<DocumentTarget | undefined> {
+    const editor = await resolveEditor(uri);
+    if (!editor) {
+        return undefined;
+    }
+
+    const targetRange = nonEmptyRange(range) || nonEmptyRange(
+        editor.selection,
+    );
+    if (!targetRange) {
+        return undefined;
+    }
+
+    return {
+        editor,
+        range: targetRange,
+    };
+}
+
+/**
+ * Returns the active editor or opens the URI supplied by VS Code commands.
+ */
+async function resolveEditor(
+    uri?: vscode.Uri
+): Promise<vscode.TextEditor | undefined> {
+    const activeEditor = vscode.window.activeTextEditor;
+
+    if (!uri) {
+        return activeEditor;
+    }
+
+    if (
+        activeEditor
+        && activeEditor.document.uri.toString() === uri.toString()
+    ) {
+        return activeEditor;
+    }
+
+    const document = await vscode.workspace.openTextDocument(uri);
+    return vscode.window.showTextDocument(document);
+}
+
+/**
+ * Keeps only ranges that cover at least one character.
+ */
+function nonEmptyRange(
+    range: vscode.Range | undefined
+): vscode.Range | undefined {
+    if (!range || range.isEmpty) {
+        return undefined;
+    }
+
+    return range;
 }
 
 /**

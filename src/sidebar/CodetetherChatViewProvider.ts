@@ -67,7 +67,9 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     public constructor(
         private readonly context: vscode.ExtensionContext
     ) {
-        this.client = new CodetetherClient();
+        this.client = new CodetetherClient({
+            secretStorage: this.context.secrets
+        });
         this.modelListService = new ModelListService(this.client);
         this.sessionService = new CodetetherSessionService();
         this.sessionOpenService = new CodetetherSessionOpenService();
@@ -132,7 +134,18 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      */
     private registerConfigListener(): vscode.Disposable {
         return vscode.workspace.onDidChangeConfiguration(event => {
-            if (!event.affectsConfiguration('rustyRefactor.codetetherModel')) {
+            const affectsModelDiscovery = [
+                'rustyRefactor.codetetherModel',
+                'rustyRefactor.codetetherChatTransport',
+                'rustyRefactor.codetetherServer',
+                'rustyRefactor.codetetherToken',
+                'rustyRefactor.codetetherA2AServerUrl',
+                'rustyRefactor.codeTether.enabled',
+                'rustyRefactor.codeTether.serverUrl',
+                'rustyRefactor.useCodetether'
+            ].some(setting => event.affectsConfiguration(setting));
+
+            if (!affectsModelDiscovery) {
                 return;
             }
 

@@ -31,6 +31,7 @@ function bootChatSidebar() {
     promptInput.addEventListener('input', handlePromptInput);
     promptInput.addEventListener('keydown', handlePromptKeydown);
     window.addEventListener('message', handleHostMessage);
+    updateRunSettingSummary();
     resizePromptInput();
     logUiAction('webviewReady', 'posting-ready-event');
     vscode.postMessage({ type: 'webviewReady' });

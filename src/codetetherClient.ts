@@ -9,11 +9,21 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { ChildProcess, spawn } from 'child_process';
+import {
+    summarizeCodetetherProcessFailure
+} from './codetetherProcessFailure';
 import { parseCodetetherRunOutput } from './codetetherRunOutput';
 import {
     readCodetetherSessionToolEvents
 } from './codetetherSessionToolEvents';
 import { CodetetherToolEvent } from './codetetherToolEvents';
+import {
+    CodeTetherApiError,
+    CodeTetherDiscoveryTelemetry,
+    CODE_TETHER_SERVER_SECRET_KEY,
+    CODE_TETHER_TOKEN_SECRET_KEY,
+    CodeTetherClient
+} from './codeTetherApiClient';
 import { logToOutput } from './extractor';
 
 const CODETETHER_HOSTNAME = '127.0.0.1';
@@ -24,6 +34,18 @@ const SERVER_START_TIMEOUT_MS = 15000;
 const MODEL_LIST_TIMEOUT_MS = 15000;
 const CODETETHER_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const HEALTH_POLL_INTERVAL_MS = 250;
+const CODETETHER_SERVER_SECRET_KEY = 'rustyRefactor.codetetherServer';
+const CODETETHER_TOKEN_SECRET_KEY = 'rustyRefactor.codetetherToken';
+let defaultSecretStorage: vscode.SecretStorage | undefined;
+
+/**
+ * Registers extension SecretStorage for managed CodeTether sessions.
+ */
+export function configureCodetetherSecretStorage(
+    secretStorage: vscode.SecretStorage
+): void {
+    defaultSecretStorage = secretStorage;
+}
 
 export interface JsToolCall {
     id: string;
@@ -52,10 +74,24 @@ export interface ChatMessage {
     tool_call_id?: string;
 }
 
+export interface AvailableModel {
+    label: string;
+    description: string;
+    detail: string;
+    modelId: string;
+    source: 'vscode' | 'codetether';
+}
+
+export interface CodetetherModelDiscovery {
+    items: AvailableModel[];
+    telemetry: CodeTetherDiscoveryTelemetry;
+}
+
 type CodetetherChatTransport = 'serve' | 'run';
 
 interface CodetetherClientOptions {
     skipNativeBridge?: boolean;
+    secretStorage?: vscode.SecretStorage;
 }
 
 class HttpStatusError extends Error {
@@ -161,7 +197,18 @@ async function findAvailablePort(startPort: number): Promise<number> {
     throw new Error(`Unable to find a free Codetether port starting at ${startPort}.`);
 }
 
-function buildWorkspaceEnv(workspaceFolder: vscode.WorkspaceFolder, token: string, model: string): NodeJS.ProcessEnv {
+/**
+ * Builds the environment used by extension-managed CodeTether processes.
+ *
+ * The generated auth token is shared with SecretStorage so HTTP clients can
+ * call the same server. `OPA_FAIL_OPEN` is set because local extension-managed
+ * servers should keep working when no local OPA sidecar is running.
+ */
+function buildWorkspaceEnv(
+    workspaceFolder: vscode.WorkspaceFolder,
+    token: string,
+    model: string
+): NodeJS.ProcessEnv {
     const workspaceBin = path.join(workspaceFolder.uri.fsPath, 'node_modules', '.bin');
     const currentPath = process.env.PATH ?? process.env.Path ?? '';
     const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
@@ -171,35 +218,9 @@ function buildWorkspaceEnv(workspaceFolder: vscode.WorkspaceFolder, token: strin
         [pathKey]: `${workspaceBin}${path.delimiter}${currentPath}`,
         CODETETHER_AUTH_TOKEN: token,
         OPA_ENABLED: 'false',
+        OPA_FAIL_OPEN: 'true',
         CODETETHER_DEFAULT_MODEL: model
     };
-}
-
-function stripAnsi(value: string): string {
-    return value.replace(/\u001b\[[0-9;]*m/g, '');
-}
-
-function isNonErrorLogLine(line: string): boolean {
-    const trimmed = stripAnsi(line).trim();
-
-    if (!trimmed) {
-        return true;
-    }
-
-    const hasTimestamp = /^\d{4}-\d{2}-\d{2}T/.test(trimmed);
-    const hasProcessPrefix = /^[\w.-]+(?:\/[\w.-]+)*:\s+\d{4}-\d{2}-\d{2}T/.test(trimmed);
-    const hasNonErrorLevel = /\b(INFO|WARN|DEBUG|TRACE)\b/.test(trimmed);
-
-    return (hasTimestamp || hasProcessPrefix) && hasNonErrorLevel;
-}
-
-function summarizeProcessFailure(primary: string, secondary = ''): string {
-    const lines = `${primary}\n${secondary}`
-        .split(/\r?\n/)
-        .map(line => stripAnsi(line).replace(/\r/g, '').trim())
-        .filter(line => line && !isNonErrorLogLine(line));
-
-    return lines.slice(-6).join(' | ');
 }
 
 class CodetetherServeProcess implements vscode.Disposable {
@@ -212,7 +233,8 @@ class CodetetherServeProcess implements vscode.Disposable {
     constructor(
         private readonly workspaceFolder: vscode.WorkspaceFolder,
         private readonly binaryPath: string,
-        private readonly model: string
+        private readonly model: string,
+        private readonly secretStorage?: vscode.SecretStorage
     ) {
         this.portPromise = findAvailablePort(CODETETHER_BASE_PORT);
     }
@@ -298,6 +320,7 @@ class CodetetherServeProcess implements vscode.Disposable {
         const port = await this.portPromise;
         const args = ['serve', '--hostname', CODETETHER_HOSTNAME, '--port', String(port)];
         const env = buildWorkspaceEnv(this.workspaceFolder, this.token, this.model);
+        await this.storeSessionSecrets(port);
 
         logToOutput(
             `[Codetether] Starting server in ${this.workspaceFolder.uri.fsPath} on ${CODETETHER_HOSTNAME}:${port} with model ${this.model}`
@@ -357,6 +380,43 @@ class CodetetherServeProcess implements vscode.Disposable {
         throw new Error(this.buildStartupError('Timed out waiting for Codetether serve to become healthy.'));
     }
 
+    /**
+     * Stores the managed server URL and bearer token for API clients.
+     */
+    private async storeSessionSecrets(port: number): Promise<void> {
+        if (!this.secretStorage) {
+            return;
+        }
+
+        const serverUrl = `http://${CODETETHER_HOSTNAME}:${port}`;
+        try {
+            await this.secretStorage.store(
+                CODE_TETHER_SERVER_SECRET_KEY,
+                serverUrl
+            );
+            await this.secretStorage.store(
+                CODE_TETHER_TOKEN_SECRET_KEY,
+                this.token
+            );
+            await this.secretStorage.store(
+                CODETETHER_SERVER_SECRET_KEY,
+                serverUrl
+            );
+            await this.secretStorage.store(
+                CODETETHER_TOKEN_SECRET_KEY,
+                this.token
+            );
+        } catch (error) {
+            const message = error instanceof Error
+                ? error.message
+                : String(error);
+            logToOutput(
+                `[Codetether] Failed to store managed server` +
+                ` credentials: ${message}`
+            );
+        }
+    }
+
     private stop(): void {
         if (!this.child) {
             return;
@@ -384,7 +444,9 @@ class CodetetherServeProcess implements vscode.Disposable {
     }
 
     private buildStartupError(prefix: string): string {
-        const relevantStderr = summarizeProcessFailure(this.stderrLines.join('\n'));
+        const relevantStderr = summarizeCodetetherProcessFailure(
+            this.stderrLines.join('\n')
+        );
         const stderrTail = relevantStderr
             ? ` Last stderr: ${relevantStderr}`
             : '';
@@ -484,7 +546,8 @@ class CodetetherServeManager {
     async ensureServer(
         workspaceFolder: vscode.WorkspaceFolder,
         binaryPath: string,
-        model: string
+        model: string,
+        secretStorage?: vscode.SecretStorage
     ): Promise<CodetetherServeProcess> {
         const key = workspaceFolder.uri.toString();
         const existing = this.servers.get(key);
@@ -496,7 +559,12 @@ class CodetetherServeManager {
 
         let server = this.servers.get(key);
         if (!server) {
-            server = new CodetetherServeProcess(workspaceFolder, binaryPath, model);
+            server = new CodetetherServeProcess(
+                workspaceFolder,
+                binaryPath,
+                model,
+                secretStorage
+            );
             this.servers.set(key, server);
         }
 
@@ -519,12 +587,14 @@ export class CodetetherClient {
     private defaultModel: string;
     private binaryPath: string;
     private readonly skipNativeBridge: boolean;
+    private readonly secretStorage?: vscode.SecretStorage;
 
     constructor(options: CodetetherClientOptions = {}) {
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         this.defaultModel = config.get<string>('codetetherModel') || '';
         this.binaryPath = config.get<string>('codetetherBinaryPath') || 'codetether';
         this.skipNativeBridge = options.skipNativeBridge ?? false;
+        this.secretStorage = options.secretStorage ?? defaultSecretStorage;
 
         if (this.skipNativeBridge) {
             logToOutput('[Codetether] Native bridge skip flag is ignored for chat; chat uses `codetether serve`/A2A or `codetether run`.');
@@ -561,6 +631,7 @@ export class CodetetherClient {
             tools?: JsToolDefinition[];
             preferCli?: boolean;
             transport?: CodetetherChatTransport;
+            allowCliFallback?: boolean;
             filePaths?: string[];
         } = {}
     ): Promise<JsChatResponse> {
@@ -581,7 +652,12 @@ export class CodetetherClient {
             logToOutput('[Codetether] A2A transport does not support extension-side tool callbacks; ignoring requested tools.');
         }
 
-        const server = await CodetetherServeManager.instance.ensureServer(workspaceFolder, this.binaryPath, model);
+        const server = await CodetetherServeManager.instance.ensureServer(
+            workspaceFolder,
+            this.binaryPath,
+            model,
+            this.secretStorage
+        );
 
         logToOutput(
             `[Codetether] Sending A2A task to ${workspaceFolder.name} on ${CODETETHER_HOSTNAME} with model ${model}`
@@ -591,6 +667,10 @@ export class CodetetherClient {
             return await server.sendPrompt(prompt);
         } catch (error) {
             if (!this.isA2AForbiddenError(error)) {
+                throw error;
+            }
+
+            if (options.allowCliFallback === false) {
                 throw error;
             }
 
@@ -690,7 +770,10 @@ export class CodetetherClient {
                 settled = true;
                 clearTimeout(timeout);
                 if (code !== 0) {
-                    const detail = summarizeProcessFailure(stderr, stdout) || '<no non-log error output>';
+                    const detail = summarizeCodetetherProcessFailure(
+                        stderr,
+                        stdout
+                    ) || '<no non-log error output>';
                     logToOutput(`[Codetether] CLI transport exited with code ${code}: ${detail}`);
                     reject(new Error(`Codetether CLI transport exited with code ${code}: ${detail}`));
                     return;
@@ -892,7 +975,10 @@ export class CodetetherClient {
                 }
 
                 if (code !== 0) {
-                    const detail = summarizeProcessFailure(stderr, stdout) || '<no non-log error output>';
+                    const detail = summarizeCodetetherProcessFailure(
+                        stderr,
+                        stdout
+                    ) || '<no non-log error output>';
                     logToOutput(`[Codetether] listModels CLI exited with code=${code ?? 'null'} signal=${signal ?? 'null'}: ${detail}`);
                     resolve([]);
                     return;
@@ -1096,7 +1182,12 @@ export class CodetetherClient {
             this.refreshConfig();
             const workspaceFolder = this.resolveWorkspaceFolder();
             const model = this.defaultModel || CODETETHER_DEFAULT_MODEL;
-            const server = await CodetetherServeManager.instance.ensureServer(workspaceFolder, this.binaryPath, model);
+            const server = await CodetetherServeManager.instance.ensureServer(
+                workspaceFolder,
+                this.binaryPath,
+                model,
+                this.secretStorage
+            );
             const healthy = await server.checkHealth();
             if (!healthy) {
                 return { available: false, error: 'CodeTether server failed its health check.' };
@@ -1111,7 +1202,159 @@ export class CodetetherClient {
         }
     }
 
+    /**
+     * Lists picker-ready models from CodeTether's VS Code model endpoint.
+     */
+    async listModelPickerItems(): Promise<AvailableModel[]> {
+        const discovery = await this.discoverModelPickerItems();
+
+        return discovery.items;
+    }
+
+    /**
+     * Lists picker-ready models with endpoint discovery telemetry.
+     */
+    async discoverModelPickerItems(): Promise<CodetetherModelDiscovery> {
+        const apiClient = new CodeTetherClient(this.secretStorage);
+        await this.ensureModelDiscoverySession(apiClient);
+
+        try {
+            return await this.discoverModelPickerItemsFromApi(apiClient);
+        } catch (error) {
+            if (!this.shouldRetryManagedDiscovery(error)) {
+                throw error;
+            }
+
+            logToOutput(
+                '[Codetether] Stored model endpoint is unavailable;' +
+                ' starting a fresh managed server.'
+            );
+            await this.startManagedModelDiscoverySession();
+            return this.discoverModelPickerItemsFromApi(
+                new CodeTetherClient(this.secretStorage)
+            );
+        }
+    }
+
+    /**
+     * Maps CodeTether API models into picker-ready model items.
+     */
+    private async discoverModelPickerItemsFromApi(
+        apiClient: CodeTetherClient
+    ): Promise<CodetetherModelDiscovery> {
+        const discovery = await apiClient.discoverVscodeModels();
+        const items = discovery.models.map(model => ({
+            label: model.name,
+            description: `${model.vendor}/${model.family}`,
+            detail: [
+                `Vendor: ${model.vendor}`,
+                `Family: ${model.family}`,
+                `Max tokens: ${model.maxInputTokens}`
+            ].join(', '),
+            modelId: model.id,
+            source: 'codetether' as const
+        }));
+
+        return {
+            items,
+            telemetry: {
+                ...discovery.telemetry,
+                shownModelCount: items.length
+            }
+        };
+    }
+
+    /**
+     * Returns whether a stale managed session should be replaced once.
+     */
+    private shouldRetryManagedDiscovery(error: unknown): boolean {
+        if (!(error instanceof CodeTetherApiError)) {
+            return false;
+        }
+
+        if (error.kind !== 'network' && error.kind !== 'timeout') {
+            return false;
+        }
+
+        return this.shouldStartManagedDiscoveryServer()
+            && !this.hasExplicitServerConfiguration();
+    }
+
+    /**
+     * Starts a managed server for discovery when the user opted into it.
+     */
+    private async ensureModelDiscoverySession(
+        apiClient: CodeTetherClient
+    ): Promise<void> {
+        if (await apiClient.hasConfiguredSession()) {
+            return;
+        }
+
+        if (!this.shouldStartManagedDiscoveryServer()) {
+            return;
+        }
+
+        await this.startManagedModelDiscoverySession();
+    }
+
+    /**
+     * Starts or reuses the extension-managed CodeTether server.
+     */
+    private async startManagedModelDiscoverySession(): Promise<void> {
+        this.refreshConfig();
+        const workspaceFolder = this.resolveWorkspaceFolder();
+        const model = this.defaultModel || CODETETHER_DEFAULT_MODEL;
+
+        await CodetetherServeManager.instance.ensureServer(
+            workspaceFolder,
+            this.binaryPath,
+            model,
+            this.secretStorage
+        );
+    }
+
+    /**
+     * Returns whether settings or env point at a user-managed server.
+     */
+    private hasExplicitServerConfiguration(): boolean {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+
+        return Boolean(
+            config.get<string>('codeTether.serverUrl') ||
+            config.get<string>('codetetherServer') ||
+            config.get<string>('codetetherA2AServerUrl') ||
+            process.env.CODETETHER_SERVER
+        );
+    }
+
+    /**
+     * Returns whether model discovery may create a workspace server.
+     */
+    private shouldStartManagedDiscoveryServer(): boolean {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+        const transport = config.get<string>('codetetherChatTransport') ||
+            'run';
+
+        return !this.hasExplicitServerConfiguration() || Boolean(
+            config.get<boolean>('codeTether.enabled') ||
+            config.get<boolean>('useCodetether') ||
+            transport === 'serve'
+        );
+    }
+
+    /**
+     * Lists CodeTether model IDs for compact sidebar dropdowns.
+     */
     async listModels(): Promise<string[]> {
+        const items = await this.listModelPickerItems();
+
+        return items.map(item => item.modelId);
+    }
+
+    /**
+     * Legacy CLI/A2A model probes kept only for debugging old builds.
+     */
+    private async listModelsLegacyViaCli(): Promise<string[]> {
         this.refreshConfig();
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const cwd = workspaceFolder?.uri.fsPath;
@@ -1356,8 +1599,11 @@ export class CodetetherClient {
 export class UnifiedModelClient {
     private codetetherClient: CodetetherClient;
 
-    constructor() {
-        this.codetetherClient = new CodetetherClient();
+    /**
+     * Creates a unified model client with optional secret-backed auth.
+     */
+    constructor(secretStorage?: vscode.SecretStorage) {
+        this.codetetherClient = new CodetetherClient({ secretStorage });
     }
 
     shouldUseCustomEndpoint(): boolean {
@@ -1497,27 +1743,50 @@ export class UnifiedModelClient {
         return result;
     }
 
-    async getAvailableModels(): Promise<{ id: string; source: 'vscode' | 'codetether' }[]> {
-        const models: { id: string; source: 'vscode' | 'codetether' }[] = [];
+    /**
+     * Lists picker-ready models from the requested source with fallback.
+     */
+    async getAvailableModels(
+        source: 'vscode' | 'codetether' = 'vscode'
+    ): Promise<AvailableModel[]> {
+        if (source === 'vscode') {
+            return this.getVSCodeModels();
+        }
 
+        try {
+            return await this.codetetherClient.listModelPickerItems();
+        } catch (error) {
+            logToOutput(
+                `[UnifiedModelClient] Failed to list CodeTether` +
+                ` models: ${error}`
+            );
+            return this.getVSCodeModels();
+        }
+    }
+
+    /**
+     * Lists VS Code language models as picker items.
+     */
+    private async getVSCodeModels(): Promise<AvailableModel[]> {
         try {
             const vscodeModels = await vscode.lm.selectChatModels();
-            for (const model of vscodeModels) {
-                models.push({ id: `${model.vendor}/${model.family}`, source: 'vscode' });
-            }
-        } catch (error) {
-            logToOutput(`[UnifiedModelClient] Failed to list VS Code models: ${error}`);
-        }
 
-        try {
-            const codetetherModels = await this.codetetherClient.listModels();
-            for (const model of codetetherModels) {
-                models.push({ id: model, source: 'codetether' });
-            }
+            return vscodeModels.map(model => ({
+                label: model.name || `${model.vendor}/${model.family}`,
+                description: `${model.vendor}/${model.family}`,
+                detail: [
+                    `Vendor: ${model.vendor}`,
+                    `Family: ${model.family}`,
+                    `Max tokens: ${model.maxInputTokens}`
+                ].join(', '),
+                modelId: `${model.vendor}/${model.family}`,
+                source: 'vscode' as const
+            }));
         } catch (error) {
-            logToOutput(`[UnifiedModelClient] Failed to list Codetether models: ${error}`);
+            logToOutput(
+                `[UnifiedModelClient] Failed to list VS Code models: ${error}`
+            );
+            return [];
         }
-
-        return models;
     }
 }

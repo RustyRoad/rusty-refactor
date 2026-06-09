@@ -212,6 +212,7 @@ function handleCustomModelInput() {
  */
 function handleModeChange() {
     dispatchChatState('setMode', { mode: modeInput.value });
+    updateRunSettingSummary();
     logUiAction('modeChanged', 'mode=' + String(modeInput.value));
     postTelemetry('modeChanged', { mode: modeInput.value });
 }
@@ -223,6 +224,7 @@ function handleModeChange() {
  */
 function handleFeatureChange() {
     dispatchChatState('setFeature', { feature: featureInput.value });
+    updateRunSettingSummary();
     logUiAction('featureChanged', 'feature=' + String(featureInput.value));
     postTelemetry('featureChanged', { feature: featureInput.value });
 }
@@ -236,6 +238,7 @@ function handleContextToggleChange() {
     dispatchChatState('setIncludeContext', {
         includeContext: Boolean(contextToggle.checked),
     });
+    updateRunSettingSummary();
     logUiAction(
         'contextToggled',
         'enabled=' + String(Boolean(contextToggle.checked)),
@@ -266,10 +269,72 @@ function applySuggestion(button) {
         featureInput.value = feature;
         dispatchChatState('setFeature', { feature });
     }
+    updateRunSettingSummary();
     promptInput.value = button.getAttribute('data-prompt') || '';
     dispatchChatState('setDraft', { text: promptInput.value });
     resizePromptInput();
     promptInput.focus();
+}
+
+/**
+ * Updates compact chips shown when run settings are collapsed.
+ *
+ * The full controls remain the source of truth. Chips only mirror the current
+ * select and checkbox values so the collapsed header stays informative.
+ *
+ * @returns {void}
+ */
+function updateRunSettingSummary() {
+    setChipText(modeChip, compactSelectLabel(modeInput));
+    setChipText(featureChip, compactSelectLabel(featureInput));
+    setChipText(contextChip, contextChipLabel());
+}
+
+/**
+ * Writes chip text when the target element exists in the current markup.
+ *
+ * @param {HTMLElement|null} chip - Optional summary chip element.
+ * @param {string} text - Text to show inside the chip.
+ * @returns {void}
+ */
+function setChipText(chip, text) {
+    if (chip) {
+        chip.textContent = text;
+    }
+}
+
+/**
+ * Extracts compact text from a select control's active option.
+ *
+ * Mode option labels use a colon to separate the short and long forms. Feature
+ * labels can use slash-separated wording, so the first segment is enough for
+ * the collapsed summary.
+ *
+ * @param {HTMLSelectElement|null} input - Select control to summarize.
+ * @returns {string} Compact selected-option label.
+ */
+function compactSelectLabel(input) {
+    if (!input || input.selectedIndex < 0) {
+        return '';
+    }
+
+    const label = input.options[input.selectedIndex].textContent || '';
+    const colon = label.indexOf(':');
+    const slash = label.indexOf('/');
+    const boundary = colon >= 0 ? colon : slash;
+
+    return (boundary >= 0 ? label.slice(0, boundary) : label).trim();
+}
+
+/**
+ * Returns compact context text for the collapsed run settings summary.
+ *
+ * @returns {string} Context enabled or disabled label.
+ */
+function contextChipLabel() {
+    return Boolean(contextToggle && contextToggle.checked)
+        ? 'Context on'
+        : 'Context off';
 }
 
 /**

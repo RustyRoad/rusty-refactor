@@ -48,16 +48,20 @@ function handleSessionIdKeydown(event) {
 }
 
 /**
- * Formats a session update timestamp for display in the sessions list.
+ * Formats a session update timestamp for compact sidebar display.
  *
  * @param {string|number|Date} value - Timestamp accepted by Date.
- * @returns {string} Localized timestamp, or a placeholder for missing values.
+ * @returns {string} Localized time, or a placeholder for missing values.
  */
 function formatSessionTime(value) {
     if (!value) {
         return 'unknown time';
     }
-    return new Date(value).toLocaleString();
+
+    return new Date(value).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 /**
@@ -75,7 +79,7 @@ function openSession(session) {
 }
 
 /**
- * Appends one session button to the sessions list.
+ * Appends one compact session button to the sessions list.
  *
  * @param {object} session - Session metadata from the extension host.
  * @returns {void}
@@ -84,18 +88,41 @@ function appendSessionItem(session) {
     const button = document.createElement('button');
     button.className = 'session-item';
     button.title = session.path || '';
-    button.textContent = session.preview || session.id;
+
+    const title = document.createElement('span');
+    title.className = 'session-title';
+    title.textContent = session.preview || session.id;
+
     const id = document.createElement('code');
     id.className = 'session-id';
     id.textContent = session.id;
+
     const meta = document.createElement('span');
     meta.className = 'session-meta';
     meta.textContent = String(session.turnCount || 0)
-        + ' turns · ' + formatSessionTime(session.updatedAt);
+        + ' turns - ' + formatSessionTime(session.updatedAt);
+
+    button.appendChild(title);
     button.appendChild(id);
     button.appendChild(meta);
     button.onclick = openSession.bind(null, session);
     sessionsList.appendChild(button);
+}
+
+/**
+ * Updates the compact sessions header count.
+ *
+ * @param {number} count - Number of recent sessions currently rendered.
+ * @returns {void}
+ */
+function updateSessionsCaption(count) {
+    if (!sessionsCaption) {
+        return;
+    }
+
+    sessionsCaption.textContent = count === 1
+        ? '1 recent'
+        : String(count) + ' recent';
 }
 
 /**
@@ -108,6 +135,7 @@ function renderSessions(sessions) {
     const state = dispatchChatState('sessionsListed', { sessions });
     const items = state.sessions;
     sessionsList.innerHTML = '';
+    updateSessionsCaption(items.length);
     if (items.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'subtitle';

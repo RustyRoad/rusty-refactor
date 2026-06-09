@@ -10,3 +10,10 @@ rust-backend/target/
 target/
 target/rust-analyzer/flycheck0/stderr
 target/rust-analyzer/flycheck0/stdout
+.codetether/
+.codetether-agent/
+rust-backend\napi-bridge\error.log
+rust-backend\napi-bridge\temp_check.txt
+debug.log
+cargo-napi.log
+moltbook*.md

@@ -44,6 +44,7 @@ export interface ModelListPayload {
     models: string[];
     configuredModel: string;
     status?: string;
+    discoveryTelemetry?: Record<string, unknown>;
 }
 
 /**

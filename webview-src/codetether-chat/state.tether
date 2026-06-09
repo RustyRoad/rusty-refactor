@@ -11,8 +11,8 @@ fn chat_state_spec() {
     defaults.statusText = "Ready"
     defaults.busyStatusText = "Working..."
     defaults.modelStatus = "Loading models..."
-    defaults.mode = "orchestrate"
-    defaults.feature = "swarm"
+    defaults.mode = "chat"
+    defaults.feature = "auto"
     defaults.includeContext = true
     defaults.voiceInputSupported = false
     defaults.voiceInputActive = false

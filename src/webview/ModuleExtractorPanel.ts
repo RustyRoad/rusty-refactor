@@ -694,7 +694,9 @@ export class ModuleExtractorPanel {
 
         if (this._workspaceFolder.uri.scheme === 'file' &&
             targetUri.scheme === 'file') {
-            const workspacePath = path.resolve(this._workspaceFolder.uri.fsPath);
+            const workspacePath = path.resolve(
+                this._workspaceFolder.uri.fsPath,
+            );
             const targetPath = path.resolve(targetUri.fsPath);
             const relative = path.relative(workspacePath, targetPath);
 
@@ -827,8 +829,11 @@ export class ModuleExtractorPanel {
         <nav class="breadcrumb-container" aria-label="Directory breadcrumb">
             <div class="breadcrumb" id="breadcrumb"></div>
         </nav>
-        <main class="content">
-            <aside class="sidebar" aria-label="Destination directories">
+        <main class="content" aria-label="Destination browser">
+            <section
+                class="destination-panel"
+                aria-label="Destination directories"
+            >
                 <div class="file-tree">
                     <div class="tree-header">
                         <div id="current-path" class="current-path">
@@ -841,73 +846,53 @@ export class ModuleExtractorPanel {
                         role="tree"
                     ></div>
                 </div>
-            </aside>
-            <section class="main-content" aria-label="Extraction actions">
-                <div class="actions">
-                    <button
-                        id="create-btn"
-                        class="btn btn-primary"
-                        disabled
-                    >
-                        <i
-                            class="codicon codicon-check"
-                            aria-hidden="true"
-                        ></i>
-                        <span id="create-btn-label">
-                            Select a destination
-                        </span>
-                    </button>
-                    <button
-                        id="cancel-btn"
-                        class="btn btn-secondary"
-                    >
-                        <i
-                            class="codicon codicon-x"
-                            aria-hidden="true"
-                        ></i>
-                        Cancel
-                    </button>
-                </div>
-                <div
-                    class="conversion-info hidden"
-                    id="conversion-info"
-                >
-                    <div class="info-box warning">
-                        <i
-                            class="codicon codicon-warning"
-                            aria-hidden="true"
-                        ></i>
-                        <div>
-                            <strong>Module Conversion Required</strong>
-                            <p>
-                                The selected file will be converted
-                                to a folder-based module structure.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div class="help-info">
-                    <h3>
-                        <i
-                            class="codicon codicon-lightbulb"
-                            aria-hidden="true"
-                        ></i>
-                        How to use
-                    </h3>
-                    <ol>
-                        <li>
-                            Browse the tree and select a destination.
-                        </li>
-                        <li>
-                            The Extract button activates once selected.
-                        </li>
-                        <li>
-                            Module files shown can become folder modules.
-                        </li>
-                    </ol>
-                </div>
             </section>
         </main>
+        <footer class="footer" aria-label="Extraction actions">
+            <div
+                class="conversion-info hidden"
+                id="conversion-info"
+            >
+                <div class="info-box warning">
+                    <i
+                        class="codicon codicon-warning"
+                        aria-hidden="true"
+                    ></i>
+                    <div>
+                        <strong>Module Conversion Required</strong>
+                        <p>
+                            The selected file will be converted
+                            to a folder-based module structure.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="actions">
+                <button
+                    id="create-btn"
+                    class="btn btn-primary"
+                    disabled
+                >
+                    <i
+                        class="codicon codicon-check"
+                        aria-hidden="true"
+                    ></i>
+                    <span id="create-btn-label">
+                        Select a destination
+                    </span>
+                </button>
+                <button
+                    id="cancel-btn"
+                    class="btn btn-secondary"
+                >
+                    <i
+                        class="codicon codicon-x"
+                        aria-hidden="true"
+                    ></i>
+                    Cancel
+                </button>
+            </div>
+        </footer>
     </div>
     <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>

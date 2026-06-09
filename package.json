@@ -26,6 +26,7 @@
     "rails"
   ],
   "activationEvents": [
+    "onCommand:rustyRefactor.documentWithCodetether",
     "onLanguage:rust",
     "onChatParticipant:rustyRefactor.codetether",
     "workspaceContains:**/Cargo.toml"
@@ -369,6 +370,16 @@
           "default": false,
           "description": "Use Codetether as the AI backend instead of VS Code built-in language models"
         },
+        "rustyRefactor.codeTether.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable CodeTether API model discovery."
+        },
+        "rustyRefactor.codeTether.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "CodeTether server URL."
+        },
         "rustyRefactor.codetetherModel": {
           "type": "string",
           "default": "",
@@ -392,6 +403,16 @@
           "type": "string",
           "default": "",
           "description": "Optional URL of a remote Codetether A2A server to use for model discovery and chat (e.g. http://localhost:8000). Useful when port-forwarding a cluster-hosted a2a-server."
+        },
+        "rustyRefactor.codetetherServer": {
+          "type": "string",
+          "default": "",
+          "description": "CodeTether server URL."
+        },
+        "rustyRefactor.codetetherToken": {
+          "type": "string",
+          "default": "",
+          "description": "CodeTether bearer token."
         },
         "rustyRefactor.ttsVoiceId": {
           "type": "string",

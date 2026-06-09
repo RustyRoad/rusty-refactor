@@ -150,9 +150,15 @@ function updateModelMeta() {
  * @param {string[]} models - Model ids returned by the extension host.
  * @param {string} configuredModel - Persisted default model id.
  * @param {string} status - Human-readable status for the model list.
+ * @param {object} discoveryTelemetry - Host-side discovery diagnostics.
  * @returns {void}
  */
-function populateModels(models, configuredModel, status) {
+function populateModels(
+    models,
+    configuredModel,
+    status,
+    discoveryTelemetry
+) {
     const state = dispatchChatState('modelsListed', {
         models,
         configuredModel,
@@ -167,6 +173,7 @@ function populateModels(models, configuredModel, status) {
         providers,
         providerModelCounts: counts,
         status: status || '',
+        discoveryTelemetry: discoveryTelemetry || {},
     });
 
     renderModelOptions();

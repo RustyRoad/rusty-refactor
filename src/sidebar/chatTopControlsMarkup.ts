@@ -1,36 +1,40 @@
 /**
- * Builds header, toolbar, model, and speech controls for chat.
+ * Builds the compact header and model controls for chat.
  */
 export class ChatTopControlsMarkup {
     /**
-     * Returns header, model, and voice controls.
+     * Returns title, toolbar, and model controls.
      */
     public markup(): string {
         return [
             this.brandControls(),
             this.modelControls(),
-            this.voiceControls(),
-            this.voiceInputControls(),
         ].join('\n');
     }
 
     /**
-     * Returns title and toolbar controls.
+     * Returns the title and high-priority toolbar commands.
      */
     private brandControls(): string {
         return [
             '<div class="brand-row">',
             '<div class="brand">',
             '<div class="title">Codetether Chat</div>',
-            '<div id="model-caption" class="subtitle">Loading models…</div>',
+            '<div id="model-caption" class="subtitle">Loading models...</div>',
             '</div>',
             '<div class="toolbar-row">',
-            '<button id="tui-btn" title="Open terminal UI"',
-            ' aria-label="Open terminal UI">TUI</button>',
-            '<button id="refresh-btn" class="icon" title="Refresh"',
-            ' aria-label="Refresh models and sessions">↻</button>',
-            '<button id="clear-btn" title="Clear chat"',
-            ' aria-label="Clear chat">Clear</button>',
+            '<button id="tui-btn" class="icon-button"',
+            ' title="Open terminal UI" aria-label="Open terminal UI">',
+            '<span class="icon-glyph" aria-hidden="true">&gt;_</span>',
+            '</button>',
+            '<button id="refresh-btn" class="icon-button" title="Refresh"',
+            ' aria-label="Refresh models and sessions">',
+            '<span class="icon-glyph" aria-hidden="true">&#8635;</span>',
+            '</button>',
+            '<button id="clear-btn" class="icon-button" title="Clear chat"',
+            ' aria-label="Clear chat">',
+            '<span class="icon-glyph" aria-hidden="true">&#10005;</span>',
+            '</button>',
             '</div>',
             '</div>',
         ].join('\n');
@@ -41,57 +45,43 @@ export class ChatTopControlsMarkup {
      */
     private modelControls(): string {
         return [
+            '<details class="model-panel">',
+            '<summary class="section-toggle">',
+            '<span class="section-title">Models</span>',
+            '<span class="toggle-label">',
+            '<span class="show-label">Show</span>',
+            '<span class="hide-label">Hide</span>',
+            '</span>',
+            '</summary>',
             '<div class="model-stack">',
             '<div class="model-row">',
             '<label class="sr-only" for="model-input">Model</label>',
             '<select id="model-input">',
             '<option value="">Default model</option>',
             '</select>',
+            '<button id="use-model-btn" class="icon-button"',
+            ' title="Use selected model" aria-label="Use selected model">',
+            '<span class="icon-glyph" aria-hidden="true">&#10003;</span>',
+            '</button>',
             '</div>',
-            '<div class="provider-strip" id="provider-strip"></div>',
+            '<details class="custom-model-panel">',
+            '<summary>Custom</summary>',
             '<div class="model-actions">',
             '<input id="custom-model-input"',
             ' aria-label="Custom model"',
-            ' placeholder="provider/model…">',
-            '<button id="use-model-btn" title="Use custom model">Use</button>',
-            '<button id="save-model-btn" title="Save custom model">',
-            'Save</button>',
+            ' placeholder="provider/model...">',
+            '<button id="save-model-btn" class="icon-button"',
+            ' title="Save custom model" aria-label="Save custom model">',
+            '<span class="icon-glyph" aria-hidden="true">&#128190;</span>',
+            '</button>',
             '</div>',
+            '</details>',
+            '<div class="provider-strip" id="provider-strip"></div>',
             '<div id="model-meta" class="model-meta">',
-            'Default/manual model remains usable while discovery loads.',
+            'Using automatic model.',
             '</div>',
             '</div>',
-        ].join('\n');
-    }
-
-    /**
-     * Returns voice selection controls for assistant read-aloud playback.
-     */
-    private voiceControls(): string {
-        return [
-            '<div class="voice-row">',
-            '<label for="voice-input">Voice</label>',
-            '<select id="voice-input" aria-label="Read aloud voice">',
-            '<option value="">Automatic voice</option>',
-            '</select>',
-            '</div>',
-        ].join('\n');
-    }
-
-    /**
-     * Returns microphone input controls for speech-to-text capture.
-     */
-    private voiceInputControls(): string {
-        return [
-            '<div class="voice-row">',
-            '<label for="voice-source-input">Input</label>',
-            '<select id="voice-source-input"',
-            ' aria-label="Voice input source">',
-            '<option value="windows-default">',
-            'Default Windows microphone',
-            '</option>',
-            '</select>',
-            '</div>',
+            '</details>',
         ].join('\n');
     }
 }

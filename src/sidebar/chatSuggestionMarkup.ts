@@ -18,9 +18,8 @@ export class ChatSuggestionMarkup {
         return [
             '<div class="empty-state" id="empty-state">',
             '<div class="empty-title">',
-            'Ask Codetether about your workspace.',
+            'Start with a workspace task.',
             '</div>',
-            'Ask a question, or choose a preset below.',
             '<div class="quick-grid">',
             this.explainSuggestion(),
             this.agentFixSuggestion(),

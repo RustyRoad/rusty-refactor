@@ -11,7 +11,7 @@ export { featureInstruction };
  * Returns a supported mode, falling back to normal chat for bad input.
  */
 export function normalizeMode(mode?: ChatMode): ChatMode {
-    return mode && CHAT_MODES.includes(mode) ? mode : 'orchestrate';
+    return mode && CHAT_MODES.includes(mode) ? mode : 'chat';
 }
 
 /**
@@ -22,7 +22,7 @@ export function normalizeFeature(
 ): CodetetherFeature {
     return feature && CODETETHER_FEATURES.includes(feature)
         ? feature
-        : 'swarm';
+        : 'auto';
 }
 
 /**

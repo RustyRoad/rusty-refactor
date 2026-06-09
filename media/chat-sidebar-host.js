@@ -80,6 +80,7 @@ function handleModelsListedMessage(message) {
         message.models,
         message.configuredModel,
         message.status,
+        message.discoveryTelemetry || {},
     );
 }
 

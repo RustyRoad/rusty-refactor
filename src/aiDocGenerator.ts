@@ -4,11 +4,28 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { RustAnalyzerIntegration } from './rustAnalyzerIntegration';
 import { CodetetherClient, ChatMessage } from './codetetherClient';
+import {
+    CodeTetherApiError,
+    CodeTetherClient,
+    CodeTetherModel
+} from './codeTetherApiClient';
 import { logToOutput } from './extractor';
 
 interface DocumentationStyle {
     languageLabel: string;
     syntaxGuidance: string[];
+}
+
+type DocumentationModelChoice =
+    | { source: 'vscode'; model: vscode.LanguageModelChat }
+    | { source: 'codeTether'; modelId: string; label: string };
+
+interface DocumentationModelPickerItem {
+    label: string;
+    description: string;
+    detail: string;
+    modelId: string;
+    source: 'vscode' | 'codeTether';
 }
 
 /**
@@ -18,9 +35,11 @@ interface DocumentationStyle {
 export class AIDocGenerator {
     private static hasWarnedAboutMissingLm = false;
     private readonly codetetherClient: CodetetherClient;
+    private readonly codeTetherClient: CodeTetherClient;
 
-    public constructor() {
-        this.codetetherClient = new CodetetherClient();
+    public constructor(secretStorage?: vscode.SecretStorage) {
+        this.codetetherClient = new CodetetherClient({ secretStorage });
+        this.codeTetherClient = new CodeTetherClient(secretStorage);
     }
 
     /**
@@ -39,18 +58,23 @@ export class AIDocGenerator {
         moduleName: string
     ): Promise<string | null> {
         try {
-            if (!this.isLanguageModelApiAvailable()) {
-                this.warnLanguageModelUnavailable();
+            const modelChoice = await this.selectDocumentationModelChoice();
+            if (!modelChoice) {
+                vscode.window.showWarningMessage(
+                    'No language models available for documentation generation.'
+                );
                 return null;
             }
 
-            // Select the best model for doc generation (uses preferred/full model)
-            const model = await this.selectModelForTask('generate');
-            if (!model) {
-                vscode.window.showWarningMessage('No language models available for documentation generation.');
-                return null;
+            if (modelChoice.source === 'codeTether') {
+                return this.generateDocumentationWithCodeTetherModel(
+                    code,
+                    moduleName,
+                    modelChoice.modelId
+                );
             }
 
+            const model = modelChoice.model;
             logToOutput('Using language model for documentation generation.');
             logToOutput(`Selected model: ${model.name} (${model.vendor})`);
 
@@ -181,7 +205,11 @@ export class AIDocGenerator {
 
             const response = await this.codetetherClient.chatCompletion(
                 messages,
-                { filePaths: [sourceFilePath] },
+                {
+                    filePaths: [sourceFilePath],
+                    transport: 'serve',
+                    allowCliFallback: false
+                },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
                 response.text || '',
@@ -234,6 +262,71 @@ export class AIDocGenerator {
     }
 
     /**
+     * Generates documentation with a selected CodeTether server-side model.
+     */
+    private async generateDocumentationWithCodeTetherModel(
+        code: string,
+        moduleName: string,
+        modelId: string
+    ): Promise<string | null> {
+        const messages: ChatMessage[] = [
+            {
+                role: 'system',
+                content: [
+                    'You are an expert Rust documentation writer.',
+                    'Follow rustdoc conventions exactly.',
+                    'Only add or improve documentation comments.',
+                    'Do not change executable Rust code.',
+                ].join(' '),
+            },
+            {
+                role: 'user',
+                content: this.buildDocumentationPrompt(moduleName, code),
+            },
+        ];
+
+        try {
+            const response = await this.codetetherClient.chatCompletion(
+                messages,
+                {
+                    model: modelId,
+                    transport: 'serve',
+                    allowCliFallback: false
+                }
+            );
+            const cleaned = this.cleanMarkdownCodeBlocks(
+                response.text || ''
+            );
+
+            if (!cleaned || this.containsPlaceholderText(cleaned)) {
+                return null;
+            }
+
+            const validationResult = await this.validateWithDiagnostics(
+                cleaned,
+                code,
+                moduleName
+            );
+
+            if (!validationResult.isValid) {
+                logToOutput(
+                    `CodeTether documentation failed validation: ` +
+                    `${validationResult.errors.join('; ')}`
+                );
+                return null;
+            }
+
+            return cleaned;
+        } catch (error) {
+            const message = error instanceof Error
+                ? error.message
+                : String(error);
+            logToOutput(`CodeTether documentation failed: ${message}`);
+            return null;
+        }
+    }
+
+    /**
      * Generates documentation for a selected code snippet using Codetether.
      *
      * This path is language-aware and is intended for direct editor
@@ -261,7 +354,11 @@ export class AIDocGenerator {
         try {
             const response = await this.codetetherClient.chatCompletion(
                 this.codetetherDocumentationMessages(prompt, languageId),
-                { filePaths: [sourceFilePath] },
+                {
+                    filePaths: [sourceFilePath],
+                    transport: 'serve',
+                    allowCliFallback: false
+                },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
                 response.text || '',
@@ -627,7 +724,11 @@ export class AIDocGenerator {
         try {
             const response = await this.codetetherClient.chatCompletion(
                 this.codetetherDocumentationMessages(prompt, languageId),
-                { filePaths: [sourceFilePath] },
+                {
+                    filePaths: [sourceFilePath],
+                    transport: 'serve',
+                    allowCliFallback: false
+                },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
                 response.text || '',
@@ -719,7 +820,11 @@ export class AIDocGenerator {
                     },
                     { role: 'user', content: prompt },
                 ],
-                { filePaths: [sourceFilePath] },
+                {
+                    filePaths: [sourceFilePath],
+                    transport: 'serve',
+                    allowCliFallback: false
+                },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
                 response.text || '',
@@ -755,6 +860,149 @@ export class AIDocGenerator {
             );
             AIDocGenerator.hasWarnedAboutMissingLm = true;
         }
+    }
+
+    /**
+     * Selects the documentation model and remembers its provider source.
+     */
+    private async selectDocumentationModelChoice(): Promise<
+        DocumentationModelChoice | null
+    > {
+        const config = vscode.workspace.getConfiguration('rustyRefactor');
+        const preferredModelId = config.get<string>('aiPreferredModel') || '';
+        const preferredSource =
+            config.get<string>('aiPreferredModelSource') || '';
+
+        if (preferredModelId && preferredSource !== 'vscode') {
+            const codeTetherModel = await this.findCodeTetherModel(
+                preferredModelId,
+                preferredSource === 'codeTether'
+            );
+            if (codeTetherModel) {
+                return {
+                    source: 'codeTether',
+                    modelId: codeTetherModel.id,
+                    label: codeTetherModel.name
+                };
+            }
+        }
+
+        const vscodeModel = await this.selectDocumentationModel();
+        return vscodeModel ? { source: 'vscode', model: vscodeModel } : null;
+    }
+
+    /**
+     * Finds a suitable CodeTether model matching the saved preference.
+     */
+    private async findCodeTetherModel(
+        modelId: string,
+        notify: boolean
+    ): Promise<CodeTetherModel | undefined> {
+        if (!await this.codeTetherClient.isEnabledOrConfigured()) {
+            return undefined;
+        }
+
+        try {
+            const models = await this.codeTetherClient.listVscodeModels();
+            return models
+                .filter(model => model.maxInputTokens >= 4000)
+                .find(model => model.id === modelId);
+        } catch (error) {
+            this.handleCodeTetherModelError(error, notify);
+            return undefined;
+        }
+    }
+
+    /**
+     * Lists suitable CodeTether models as picker items.
+     */
+    private async codeTetherPickerItems(): Promise<
+        DocumentationModelPickerItem[]
+    > {
+        if (!await this.codeTetherClient.isEnabledOrConfigured()) {
+            return [];
+        }
+
+        try {
+            const models = await this.codeTetherClient.listVscodeModels();
+            return models
+                .filter(model => model.maxInputTokens >= 4000)
+                .map(model => ({
+                    label: model.name,
+                    description: model.id,
+                    detail: [
+                        `Vendor: ${model.vendor}`,
+                        `Family: ${model.family}`,
+                        `Max tokens: ${model.maxInputTokens}`
+                    ].join(', '),
+                    modelId: model.id,
+                    source: 'codeTether' as const
+                }));
+        } catch (error) {
+            this.handleCodeTetherModelError(error, true);
+            return [];
+        }
+    }
+
+    /**
+     * Lists suitable VS Code language models as picker items.
+     */
+    private async vscodePickerItems(): Promise<DocumentationModelPickerItem[]> {
+        if (!this.isLanguageModelApiAvailable()) {
+            return [];
+        }
+
+        const models = await vscode.lm.selectChatModels();
+        return models
+            .filter(model => model.maxInputTokens >= 4000)
+            .map(model => ({
+                label: model.name,
+                description: `${model.vendor}/${model.family}`,
+                detail: [
+                    `Vendor: ${model.vendor}`,
+                    `Family: ${model.family}`,
+                    `Max tokens: ${model.maxInputTokens}`
+                ].join(', '),
+                modelId: `${model.vendor}/${model.family}`,
+                source: 'vscode' as const
+            }));
+    }
+
+    /**
+     * Shows token-safe messages for CodeTether model discovery errors.
+     */
+    private handleCodeTetherModelError(
+        error: unknown,
+        notify: boolean
+    ): void {
+        if (error instanceof CodeTetherApiError) {
+            if (error.kind === 'auth') {
+                const message = [
+                    'CodeTether rejected model discovery auth.',
+                    'Configure CODETETHER_TOKEN or store a valid token.',
+                ].join(' ');
+                logToOutput('[CodeTether] Model discovery auth failed.');
+                if (notify) {
+                    vscode.window.showWarningMessage(message);
+                }
+                return;
+            }
+
+            if (error.kind === 'policy') {
+                const message = [
+                    'CodeTether policy denied agent:read.',
+                    'Check OPA/policy permissions for model discovery.',
+                ].join(' ');
+                logToOutput('[CodeTether] Model discovery policy denied.');
+                if (notify) {
+                    vscode.window.showWarningMessage(message);
+                }
+                return;
+            }
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        logToOutput(`[CodeTether] Model discovery failed: ${message}`);
     }
 
     /**
@@ -1044,27 +1292,17 @@ ${documentedCode}
      * Saves the selection to workspace settings.
      */
     async selectPreferredModel(): Promise<void> {
-        const allModels = await vscode.lm.selectChatModels();
-        
-        if (allModels.length === 0) {
-            vscode.window.showWarningMessage('No language models available.');
+        const items = [
+            ...await this.codeTetherPickerItems(),
+            ...await this.vscodePickerItems(),
+        ];
+
+        if (items.length === 0) {
+            vscode.window.showWarningMessage(
+                'No language models with sufficient capacity were found.'
+            );
             return;
         }
-
-        // Filter to suitable models
-        const suitableModels = allModels.filter(m => m.maxInputTokens >= 4000);
-        
-        if (suitableModels.length === 0) {
-            vscode.window.showWarningMessage('No language models with sufficient capacity (4000+ tokens) available.');
-            return;
-        }
-
-        const items = suitableModels.map(model => ({
-            label: model.name,
-            description: `${model.vendor}/${model.family}`,
-            detail: `Vendor: ${model.vendor}, Family: ${model.family}, Max tokens: ${model.maxInputTokens}`,
-            modelId: `${model.vendor}/${model.family}`
-        }));
 
         const selected = await vscode.window.showQuickPick(items, {
             placeHolder: 'Select your preferred AI model for documentation',
@@ -1074,8 +1312,19 @@ ${documentedCode}
         if (selected) {
             try {
                 const config = vscode.workspace.getConfiguration('rustyRefactor');
-                await config.update('aiPreferredModel', selected.modelId, vscode.ConfigurationTarget.Global);
-                vscode.window.showInformationMessage(`AI model set to: ${selected.label}. Reload VS Code if you just installed this extension.`);
+                await config.update(
+                    'aiPreferredModel',
+                    selected.modelId,
+                    vscode.ConfigurationTarget.Global
+                );
+                await config.update(
+                    'aiPreferredModelSource',
+                    selected.source,
+                    vscode.ConfigurationTarget.Global
+                );
+                vscode.window.showInformationMessage(
+                    `AI model set to: ${selected.label}.`
+                );
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 vscode.window.showErrorMessage(`Failed to save model preference: ${errorMsg}. Please reload VS Code and try again.`);

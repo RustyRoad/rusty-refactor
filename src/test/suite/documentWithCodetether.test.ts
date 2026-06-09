@@ -80,6 +80,48 @@ suite('Document with Codetether command', () => {
         assert.ok(updated.includes('export function add'));
     });
 
+    test('documents a command-supplied URI and range', async () => {
+        const document = await openTempDocument(
+            'document-context-menu.ts',
+            [
+                'export function multiply(a: number, b: number): number {',
+                '    return a * b;',
+                '}',
+            ].join('\n'),
+            'typescript',
+        );
+        const editor = await vscode.window.showTextDocument(document);
+        const range = new vscode.Range(
+            new vscode.Position(0, 0),
+            new vscode.Position(2, 1),
+        );
+        editor.selection = new vscode.Selection(
+            new vscode.Position(0, 0),
+            new vscode.Position(0, 0),
+        );
+
+        process.env.RUSTY_REFACTOR_TEST_DOC_RESPONSE = [
+            '/**',
+            ' * Multiplies two numbers.',
+            ' * @param a First factor.',
+            ' * @param b Second factor.',
+            ' * @returns The numeric product.',
+            ' */',
+            editor.document.getText(range),
+        ].join('\n');
+
+        await vscode.commands.executeCommand(
+            'rustyRefactor.documentWithCodetether',
+            document.uri,
+            range,
+        );
+
+        const updated = editor.document.getText();
+        assert.ok(updated.includes('Multiplies two numbers.'));
+        assert.ok(updated.includes('@returns The numeric product.'));
+        assert.ok(updated.includes('export function multiply'));
+    });
+
     test(
         'shows an error and leaves content unchanged for empty selection',
         async () => {

@@ -9,7 +9,14 @@ import { registerLanguageModelTools } from './languageModelTools';
 import { RustRefactorHoverProvider, ExtractSymbolCommand } from './hoverProvider';
 import { AIDocGenerator } from './aiDocGenerator';
 import { SrpRefactorTool } from './SrpRefactorTool';
-import { CodetetherClient, UnifiedModelClient } from './codetetherClient';
+import {
+    CodetetherClient,
+    configureCodetetherSecretStorage,
+    UnifiedModelClient
+} from './codetetherClient';
+import {
+    configureCodeTetherSecretStorage
+} from './codeTetherApiClient';
 import { CodetetherCodeActionProvider, handleFixWithCodetether, handleFixAllWithCodetether } from './fixWithCodetether';
 import { registerChatParticipant } from './chatParticipant';
 import { CodetetherChatViewProvider } from './sidebar/CodetetherChatViewProvider';
@@ -36,6 +43,8 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Make output channel globally accessible for logging from other classes
         (global as any).rustyRefactorOutputChannel = outputChannel;
+        configureCodetetherSecretStorage(context.secrets);
+        configureCodeTetherSecretStorage(context.secrets);
 
         outputChannel.appendLine('Rusty Refactor is now active!');
         outputChannel.appendLine(`Extension path: ${context.extensionPath}`);
@@ -226,7 +235,7 @@ export function activate(context: vscode.ExtensionContext) {
             'rustyRefactor.selectAIModel',
             async () => {
                 const config = vscode.workspace.getConfiguration('rustyRefactor');
-                const unifiedClient = new UnifiedModelClient();
+                const unifiedClient = new UnifiedModelClient(context.secrets);
 
                 const currentPreferred = config.get<string>('aiPreferredModel') || '';
                 const currentFast = config.get<string>('aiFastModel') || '';
@@ -235,9 +244,9 @@ export function activate(context: vscode.ExtensionContext) {
 
                 const actions = [
                     {
-                        label: '$(star-full) Preferred VS Code model',
+                        label: '$(star-full) Preferred documentation model',
                         description: currentPreferred || 'Auto-select largest available model',
-                        detail: 'Used for AI documentation and high-context planning.',
+                        detail: 'Used for AI documentation generation.',
                         value: 'preferred'
                     },
                     {
@@ -272,14 +281,38 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 if (action.value === 'toggleCodetether') {
-                    await config.update('useCodetether', !useCodetether, vscode.ConfigurationTarget.Global);
-                    vscode.window.showInformationMessage(`Codetether transport ${!useCodetether ? 'enabled' : 'disabled'}.`);
+                    const nextCodetether = !useCodetether;
+
+                    await config.update(
+                        'useCodetether',
+                        nextCodetether,
+                        vscode.ConfigurationTarget.Global
+                    );
+                    await config.update(
+                        'codeTether.enabled',
+                        nextCodetether,
+                        vscode.ConfigurationTarget.Global
+                    );
+                    vscode.window.showInformationMessage(
+                        `Codetether transport ${
+                            nextCodetether ? 'enabled' : 'disabled'
+                        }.`
+                    );
                     return;
                 }
 
-                const availableModels = await unifiedClient.getAvailableModels();
-                const wantedSource = action.value === 'codetether' ? 'codetether' : 'vscode';
-                const models = availableModels.filter(model => model.source === wantedSource);
+                if (action.value === 'preferred') {
+                    const generator = new AIDocGenerator(context.secrets);
+                    await generator.selectPreferredModel();
+                    return;
+                }
+
+                const wantedSource = action.value === 'codetether'
+                    ? 'codetether'
+                    : 'vscode';
+                const models = await unifiedClient.getAvailableModels(
+                    wantedSource,
+                );
 
                 const currentValue = action.value === 'preferred'
                     ? currentPreferred
@@ -291,33 +324,50 @@ export function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(clear-all) Automatic / default',
                         description: 'Clear this setting',
-                        detail: wantedSource === 'codetether' ? 'Use Codetether default model resolution.' : 'Let Rusty Refactor choose from VS Code models.',
+                        detail: wantedSource === 'codetether'
+                            ? 'Use Codetether default model resolution.'
+                            : 'Let Rusty Refactor choose from VS Code models.',
                         modelId: ''
                     },
                     ...models.map(model => ({
-                        label: model.id === currentValue ? `$(check) ${model.id}` : model.id,
-                        description: model.source === 'codetether' ? 'Codetether' : 'VS Code Language Model',
-                        detail: model.id === currentValue ? 'Currently selected' : undefined,
-                        modelId: model.id
+                        label: model.label,
+                        description: model.description,
+                        detail: model.detail,
+                        modelId: model.modelId,
+                        picked: model.modelId === currentValue
                     }))
                 ];
 
                 const selected = await vscode.window.showQuickPick(items, {
                     title: action.label.replace(/^\$\([^)]*\)\s*/, ''),
-                    placeHolder: models.length > 0 ? 'Pick a model' : 'No models discovered; choose default or type a custom model name',
+                    placeHolder: models.length > 0
+                        ? 'Pick a model'
+                        : [
+                            'No models discovered; choose default',
+                            'or type a custom model name',
+                        ].join(' '),
                     matchOnDescription: true,
                     matchOnDetail: true
                 });
 
                 const pickedModel = selected?.modelId;
-                const customModel = selected ? undefined : await vscode.window.showInputBox({
-                    title: 'Custom model name',
-                    prompt: 'Enter a model id manually, or leave blank for automatic/default',
-                    value: currentValue,
-                    placeHolder: wantedSource === 'codetether' ? 'openai-codex/gpt-5.5-fast' : 'vendor/family'
-                });
+                const customModel = selected
+                    ? undefined
+                    : await vscode.window.showInputBox({
+                        title: 'Custom model name',
+                        prompt: [
+                            'Enter a model id manually, or leave blank',
+                            'for automatic/default',
+                        ].join(' '),
+                        value: currentValue,
+                        placeHolder: wantedSource === 'codetether'
+                            ? 'openai-codex/gpt-5.5-fast'
+                            : 'vendor/family'
+                    });
 
-                const modelValue = pickedModel !== undefined ? pickedModel : customModel;
+                const modelValue = pickedModel !== undefined
+                    ? pickedModel
+                    : customModel;
                 if (modelValue === undefined) {
                     return;
                 }
@@ -328,8 +378,16 @@ export function activate(context: vscode.ExtensionContext) {
                         ? 'aiFastModel'
                         : 'codetetherModel';
 
-                await config.update(setting, modelValue.trim(), vscode.ConfigurationTarget.Global);
-                vscode.window.showInformationMessage(`${setting} set to ${modelValue.trim() || 'automatic/default'}.`);
+                await config.update(
+                    setting,
+                    modelValue.trim(),
+                    vscode.ConfigurationTarget.Global
+                );
+                vscode.window.showInformationMessage(
+                    `${setting} set to ${
+                        modelValue.trim() || 'automatic/default'
+                    }.`
+                );
             }
         );
 
@@ -358,8 +416,12 @@ export function activate(context: vscode.ExtensionContext) {
 
         const documentWithCodetetherCommand = vscode.commands.registerCommand(
             'rustyRefactor.documentWithCodetether',
-            async () => {
-                await handleDocumentWithCodetether();
+            async (uri?: vscode.Uri, range?: vscode.Range) => {
+                await handleDocumentWithCodetether(
+                    context.secrets,
+                    uri,
+                    range
+                );
             }
         );
 
@@ -368,7 +430,9 @@ export function activate(context: vscode.ExtensionContext) {
             'rustyRefactor.configureCodetether',
             async () => {
                 const config = vscode.workspace.getConfiguration('rustyRefactor');
-                const codetether = new CodetetherClient();
+                const codetether = new CodetetherClient({
+                    secretStorage: context.secrets
+                });
 
                 const options = [
                     { label: '$(plug) Enable Codetether', value: 'enable' },
@@ -390,12 +454,30 @@ export function activate(context: vscode.ExtensionContext) {
 
                 switch (selected.value) {
                     case 'enable':
-                        await config.update('useCodetether', true, vscode.ConfigurationTarget.Global);
+                        await config.update(
+                            'useCodetether',
+                            true,
+                            vscode.ConfigurationTarget.Global
+                        );
+                        await config.update(
+                            'codeTether.enabled',
+                            true,
+                            vscode.ConfigurationTarget.Global
+                        );
                         vscode.window.showInformationMessage('Codetether enabled for refactoring');
                         break;
 
                     case 'disable':
-                        await config.update('useCodetether', false, vscode.ConfigurationTarget.Global);
+                        await config.update(
+                            'useCodetether',
+                            false,
+                            vscode.ConfigurationTarget.Global
+                        );
+                        await config.update(
+                            'codeTether.enabled',
+                            false,
+                            vscode.ConfigurationTarget.Global
+                        );
                         vscode.window.showInformationMessage('Using VS Code built-in language models');
                         break;
 

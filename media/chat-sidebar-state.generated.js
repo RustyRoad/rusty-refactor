@@ -37,9 +37,9 @@
   "defaults": {
     "busy": false,
     "busyStatusText": "Working...",
-    "feature": "swarm",
+    "feature": "auto",
     "includeContext": true,
-    "mode": "orchestrate",
+    "mode": "chat",
     "modelStatus": "Loading models...",
     "statusText": "Ready",
     "subagentSummary": "",

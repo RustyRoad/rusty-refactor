@@ -1,4 +1,5 @@
-import { ChatModeControlsMarkup } from './chatModeControlsMarkup';
+import { ChatRunSettingsMarkup } from './chatRunSettingsMarkup';
+import { ChatSessionControlsMarkup } from './chatSessionControlsMarkup';
 import { ChatTopControlsMarkup } from './chatTopControlsMarkup';
 
 /**
@@ -10,17 +11,19 @@ export class ChatControlMarkup {
      */
     public constructor(
         private readonly topControls = new ChatTopControlsMarkup(),
-        private readonly modeControls = new ChatModeControlsMarkup()
+        private readonly runSettings = new ChatRunSettingsMarkup(),
+        private readonly sessions = new ChatSessionControlsMarkup()
     ) {}
 
     /**
-     * Returns header, model, mode, voice, and session controls.
+     * Returns the compact header and expandable configuration controls.
      */
     public controls(): string {
         return [
             '<div class="header">',
             this.topControls.markup(),
-            this.modeControls.markup(),
+            this.runSettings.markup(),
+            this.sessions.markup(),
             '</div>',
         ].join('\n');
     }
@@ -33,14 +36,13 @@ export class ChatControlMarkup {
             '<div id="input-container">',
             '<textarea id="prompt-input" rows="1"',
             ' aria-label="Chat prompt"',
-            ' placeholder="Ask Codetether…"></textarea>',
-            '<button id="voice-btn" title="Dictate prompt"',
-            ' aria-label="Dictate prompt">Mic</button>',
+            ' placeholder="Ask Codetether..."></textarea>',
+            '<button id="voice-btn" class="icon-button" title="Dictate prompt"',
+            ' aria-label="Dictate prompt">',
+            '<span class="icon-glyph" aria-hidden="true">&#127908;</span>',
+            '</button>',
             '<button id="send-btn" class="primary"',
             ' aria-label="Send prompt">Send</button>',
-            '<div class="hint">',
-            'Enter sends • Shift+Enter adds a line • Ctrl/Cmd+K clears',
-            '</div>',
             '</div>',
         ].join('\n');
     }
