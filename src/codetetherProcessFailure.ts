@@ -47,7 +47,9 @@ function failureLinesFromStream(output: string): string[] {
             skippingPromptEcho = false;
         }
 
-        if (skippingPromptEcho || isNonErrorLogLine(line)) {
+        if (skippingPromptEcho
+                || isNonErrorLogLine(line)
+                || isStackTraceLine(line)) {
             continue;
         }
 
@@ -82,10 +84,19 @@ function isNonErrorLogLine(line: string): boolean {
 }
 
 /**
+ * Detects stack trace lines that obscure the root error in short summaries.
+ */
+function isStackTraceLine(line: string): boolean {
+    return line === 'Stack backtrace:'
+        || /^\d+:\s+/.test(line);
+}
+
+/**
  * Detects lines that are more likely to describe the actual failure.
  */
 function isErrorLikeLine(line: string): boolean {
-    return /\b(ERROR|error|failed|failure|panic|exception)\b/.test(line);
+    return /\b(ERROR|Error|error|Failed|failed|failure)\b/.test(line)
+        || /\b(Panic|panic|Exception|exception)\b/.test(line);
 }
 
 /**
