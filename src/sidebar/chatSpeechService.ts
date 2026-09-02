@@ -1,243 +1,325 @@
-import { ChildProcess, spawn } from 'child_process';
-
-import { ChatWorkerLocator } from './chatWorkerLocator';
-
-/**
- * Installed voice exposed by the Rust speech worker.
- */
-export interface ChatSpeechVoice {
-    id: string;
-    name: string;
-    natural: boolean;
-}
-
-/**
- * State update emitted when speech starts, stops, or fails.
- */
-export interface ChatSpeechState {
-    messageId: string;
-    speaking: boolean;
-    supported: boolean;
-    error?: string;
-}
+import { ChatNativeSpeechBackend } from './chatNativeSpeechBackend';
+import type {
+    ChatSpeechBackend,
+    ChatSpeechAudioSink,
+    ChatSpeechState,
+    ChatSpeechStateSink,
+    ChatSpeechVoice
+} from './chatSpeechTypes';
+import { ChatWebviewSpeechBackend } from './chatWebviewSpeechBackend';
+import { ChatSpeechTextPreparer } from './chatSpeechTextPreparer';
+import { ChatSpeechStream } from './chatSpeechStream';
 
 /**
- * Callback used to publish speech state changes to the chat webview.
- */
-export type ChatSpeechStateSink = (state: ChatSpeechState) => void;
-
-/**
- * Runs text-to-speech from the extension host process.
+ * Coordinates speech state across native and remote-safe backends.
  */
 export class ChatSpeechService {
-    private child: ChildProcess | undefined;
     private activeMessageId = '';
-    private readonly workerLocator: ChatWorkerLocator;
+    private generation = 0;
+    private readonly nativeBackend: ChatNativeSpeechBackend;
+    private readonly webviewBackend: ChatWebviewSpeechBackend;
+    private readonly textPreparer = new ChatSpeechTextPreparer();
+    private stream: ChatSpeechStream | undefined;
 
+    /**
+     * Creates speech backends for one extension host and local webview.
+     */
     public constructor(
         extensionPath: string,
-        private readonly sink: ChatSpeechStateSink
+        private readonly stateSink: ChatSpeechStateSink,
+        audioSink: ChatSpeechAudioSink,
+        serverUrl: () => string
     ) {
-        this.workerLocator = new ChatWorkerLocator(extensionPath);
+        this.nativeBackend = new ChatNativeSpeechBackend(extensionPath);
+        this.webviewBackend = new ChatWebviewSpeechBackend(
+            audioSink,
+            serverUrl
+        );
     }
 
     /**
-     * Returns whether this platform has a known local speech command.
+     * Returns whether native or transferable speech is available.
      */
     public isSupported(): boolean {
-        return process.platform === 'win32'
-            && Boolean(this.workerPath());
+        return this.nativeBackend.isSupported()
+            || this.webviewBackend.isSupported();
     }
 
     /**
-     * Starts reading one assistant response aloud.
+     * Starts reading one assistant response on the appropriate client.
      */
-    public speak(messageId: string, text: string, voiceId = ''): void {
+    public async speak(
+        messageId: string,
+        text: string,
+        voiceId = ''
+    ): Promise<void> {
         const prepared = this.prepareText(text);
         if (!messageId || !prepared) {
             this.emitStopped(messageId, 'No response text to read.');
             return;
         }
 
-        if (!this.isSupported()) {
-            this.emitStopped(messageId, 'Text to speech is unsupported here.');
-            return;
-        }
-
         this.stop();
+        const generation = this.generation;
         this.activeMessageId = messageId;
         this.emit({ messageId, speaking: true, supported: true });
 
         try {
-            this.child = this.spawnSpeechProcess(prepared, voiceId);
-            this.child.once('exit', () => this.handleExit(messageId));
-            this.child.once('error', error => {
-                this.handleError(messageId, error);
-            });
+            if (this.webviewBackend.isSupported()) {
+                await this.webviewBackend.speak(
+                    messageId,
+                    prepared,
+                    voiceId
+                );
+                return;
+            }
+
+            await this.nativeBackend.speak(prepared, voiceId);
+            this.completeRequest(generation, messageId);
         } catch (error) {
-            this.handleError(messageId, error);
+            this.failRequest(generation, messageId, error);
         }
     }
 
     /**
-     * Stops any active speech process.
+     * Queues one raw Markdown fragment from an active streamed response.
+     */
+    public appendStream(
+        messageId: string,
+        text: string,
+        voiceId = ''
+    ): void {
+        const prepared = this.prepareStreamText(text);
+        if (!messageId) {
+            return;
+        }
+        const stream = this.ensureStream(messageId, voiceId);
+        if (prepared) {
+            stream.append(prepared);
+        }
+    }
+
+    /**
+     * Closes streamed speech after every queued fragment is dispatched.
+     */
+    public finishStream(messageId: string): void {
+        if (!messageId || messageId !== this.activeMessageId) {
+            return;
+        }
+        this.stream?.finish();
+    }
+
+    /**
+     * Stops native playback, remote synthesis, and local webview audio.
      */
     public stop(): void {
-        if (!this.child) {
-            this.emitStopped(this.activeMessageId);
+        this.generation += 1;
+        const messageId = this.activeMessageId;
+        this.activeMessageId = '';
+        this.stream?.cancel();
+        this.stream = undefined;
+        this.nativeBackend.stop();
+        this.webviewBackend.stop();
+        this.emitStopped(messageId);
+    }
+
+    /**
+     * Completes transferred playback after the local webview reports it.
+     */
+    public completeWebviewPlayback(
+        messageId: unknown,
+        error: unknown
+    ): void {
+        const id = typeof messageId === 'string' ? messageId : '';
+        if (!id || id !== this.activeMessageId) {
             return;
         }
 
-        const child = this.child;
-        this.child = undefined;
         this.activeMessageId = '';
-        try {
-            child.kill();
-        } catch {
-            // Best-effort cancellation; the exit handler also clears state.
-        }
-        this.emitStopped('');
+        const detail = typeof error === 'string' && error.trim()
+            ? error.trim()
+            : undefined;
+        this.emitStopped(id, detail);
     }
 
     /**
-     * Stops speech and releases process state during extension disposal.
+     * Stops speech and releases backend state during extension disposal.
      */
     public dispose(): void {
         this.stop();
     }
 
     /**
-     * Emits the current platform support status to the webview.
+     * Emits the current support and playback state to the webview.
      */
     public emitSupportStatus(): void {
         this.emit({
             messageId: this.activeMessageId,
-            speaking: Boolean(this.child),
+            speaking: Boolean(this.activeMessageId),
             supported: this.isSupported(),
         });
     }
 
     /**
-     * Lists installed voices from the native Rust worker.
+     * Lists voices for the backend that will handle the next request.
      */
     public async listVoices(): Promise<ChatSpeechVoice[]> {
-        if (!this.isSupported()) {
+        if (this.webviewBackend.isSupported()) {
+            try {
+                return await this.webviewBackend.listVoices();
+            } catch {
+                return this.nativeVoices();
+            }
+        }
+        return this.nativeVoices();
+    }
+
+    /**
+     * Lists native voices when remote speech metadata is unavailable.
+     */
+    private async nativeVoices(): Promise<ChatSpeechVoice[]> {
+        if (!this.nativeBackend.isSupported()) {
             return [];
         }
-
         try {
-            const raw = await this.runWorkerJson(['tts-voices']);
-            const parsed = JSON.parse(raw) as ChatSpeechVoice[];
-            return Array.isArray(parsed) ? parsed : [];
+            return await this.nativeBackend.listVoices();
         } catch {
             return [];
         }
     }
 
     /**
-     * Creates the Rust speech worker process and writes text to stdin.
-     */
-    private spawnSpeechProcess(text: string, voiceId: string): ChildProcess {
-        const command = this.workerCommand(voiceId);
-        const child = spawn(command.exe, command.args, {
-            stdio: ['pipe', 'ignore', 'pipe'],
-            windowsHide: true,
-        });
-
-        child.stderr?.on('data', () => {
-            // Stderr is intentionally ignored here; spawn errors are handled
-            // through the process error and exit events.
-        });
-        child.stdin?.end(text);
-        return child;
-    }
-
-    /**
-     * Returns the executable and args for the Rust speech worker.
-     */
-    private workerCommand(voiceId = ''): { exe: string; args: string[] } {
-        const worker = this.workerPath();
-        if (!worker) {
-            throw new Error('Rust TTS worker is missing from the extension.');
-        }
-
-        const args = ['tts'];
-        if (voiceId) {
-            args.push('--voice', voiceId);
-        }
-        return { exe: worker, args };
-    }
-
-    /**
-     * Runs the Rust worker and resolves with stdout text.
-     */
-    private runWorkerJson(args: string[]): Promise<string> {
-        const worker = this.workerPath();
-        if (!worker) {
-            return Promise.reject(
-                new Error('Rust TTS worker is missing from the extension.')
-            );
-        }
-
-        return new Promise((resolve, reject) => {
-            const child = spawn(worker, args, {
-                stdio: ['ignore', 'pipe', 'pipe'],
-                windowsHide: true,
-            });
-            let stdout = '';
-            let stderr = '';
-            child.stdout?.on('data', data => {
-                stdout += data.toString();
-            });
-            child.stderr?.on('data', data => {
-                stderr += data.toString();
-            });
-            child.once('error', reject);
-            child.once('exit', code => {
-                if (code === 0) {
-                    resolve(stdout.trim());
-                    return;
-                }
-                reject(new Error(stderr.trim() || `worker exited ${code}`));
-            });
-        });
-    }
-
-    /**
-     * Returns the packaged Rust worker executable path when it exists.
-     */
-    private workerPath(): string | undefined {
-        return this.workerLocator.workerPath();
-    }
-
-    /**
-     * Normalizes large assistant responses before sending them to TTS.
+     * Normalizes large assistant responses before speech synthesis.
      */
     private prepareText(text: string): string {
-        return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 20000);
+        return this.textPreparer
+            .prepare(String(text || ''))
+            .slice(0, 20000);
     }
 
     /**
-     * Clears active state after a speech process exits.
+     * Keeps streamed narrative while silently omitting structured fragments.
      */
-    private handleExit(messageId: string): void {
-        if (messageId !== this.activeMessageId) {
+    private prepareStreamText(text: string): string {
+        return this.textPreparer
+            .prepareFragment(String(text || ''))
+            .slice(0, 20000);
+    }
+
+    /**
+     * Starts or reuses the ordered queue for one streamed response.
+     */
+    private ensureStream(
+        messageId: string,
+        voiceId: string
+    ): ChatSpeechStream {
+        if (this.stream && messageId === this.activeMessageId) {
+            return this.stream;
+        }
+        this.stop();
+        const generation = this.generation;
+        this.activeMessageId = messageId;
+        this.emit({ messageId, speaking: true, supported: true });
+        this.stream = new ChatSpeechStream(
+            text => this.playStreamFragment(
+                generation,
+                messageId,
+                text,
+                voiceId
+            ),
+            () => this.completeStream(generation, messageId),
+            error => this.failRequest(generation, messageId, error)
+        );
+        return this.stream;
+    }
+
+    /**
+     * Sends one fragment through the backend selected for this environment.
+     */
+    private async playStreamFragment(
+        generation: number,
+        messageId: string,
+        text: string,
+        voiceId: string
+    ): Promise<void> {
+        if (!this.isCurrent(generation, messageId)) {
+            return;
+        }
+        if (this.webviewBackend.isSupported()) {
+            await this.webviewBackend.append(
+                messageId,
+                text,
+                voiceId
+            );
+            return;
+        }
+        await this.nativeBackend.speak(text, voiceId);
+    }
+
+    /**
+     * Completes native playback or marks transferred audio input finished.
+     */
+    private completeStream(
+        generation: number,
+        messageId: string
+    ): void {
+        if (!this.isCurrent(generation, messageId)) {
+            return;
+        }
+        this.stream = undefined;
+        if (this.webviewBackend.isSupported()) {
+            this.webviewBackend.finish(messageId);
+            return;
+        }
+        this.completeRequest(generation, messageId);
+    }
+
+    /**
+     * Completes a native request when it remains the active generation.
+     */
+    private completeRequest(
+        generation: number,
+        messageId: string
+    ): void {
+        if (!this.isCurrent(generation, messageId)) {
             return;
         }
 
-        this.child = undefined;
         this.activeMessageId = '';
         this.emitStopped(messageId);
     }
 
     /**
-     * Reports a speech process failure to the webview.
+     * Reports a backend failure when its request is still active.
      */
-    private handleError(messageId: string, error: unknown): void {
-        const message = error instanceof Error ? error.message : String(error);
-        this.child = undefined;
+    private failRequest(
+        generation: number,
+        messageId: string,
+        error: unknown
+    ): void {
+        if (!this.isCurrent(generation, messageId)) {
+            return;
+        }
+
+        const detail = error instanceof Error
+            ? error.message
+            : String(error);
+        console.error(
+            `[Codetether Chat] Speech failed: ${detail}`
+        );
         this.activeMessageId = '';
-        this.emitStopped(messageId, message);
+        this.emitStopped(messageId, detail);
+    }
+
+    /**
+     * Checks whether an asynchronous result belongs to the active request.
+     */
+    private isCurrent(
+        generation: number,
+        messageId: string
+    ): boolean {
+        return generation === this.generation
+            && messageId === this.activeMessageId;
     }
 
     /**
@@ -255,7 +337,23 @@ export class ChatSpeechService {
     /**
      * Sends one speech state update to the configured sink.
      */
-    private emit(state: ChatSpeechState): void {
-        this.sink(state);
+    private emit(state: Omit<ChatSpeechState, 'backend'>): void {
+        this.stateSink({
+            ...state,
+            backend: this.backend()
+        });
+    }
+
+    /**
+     * Identifies the playback implementation used in this environment.
+     */
+    private backend(): ChatSpeechBackend {
+        if (this.webviewBackend.isSupported()) {
+            return 'server';
+        }
+        if (this.nativeBackend.isSupported()) {
+            return 'native';
+        }
+        return 'none';
     }
 }

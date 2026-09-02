@@ -31,18 +31,29 @@ function toggleSpeech(record) {
  * @returns {void}
  */
 function startSpeech(record) {
+    if (record.streaming) {
+        startStreamingSpeech(record);
+        return;
+    }
+    resetStreamingSpeech();
+    prepareSpeechAudioPlayback();
     currentSpeechButton = speechButtonForMessage(record.id);
     dispatchChatState('setSpeakingMessage', {
         messageId: record.id,
     });
     updateSpeechButtons();
+    const request = {
+        messageId: record.id,
+        text: speechText(record.content),
+        voiceId: getChatState().selectedVoiceId,
+    };
+    if (shouldUseSystemSpeech()
+            && startSystemSpeechPlayback(request)) {
+        return;
+    }
     vscode.postMessage({
         type: 'speakText',
-        value: {
-            messageId: record.id,
-            text: speechText(record.content),
-            voiceId: getChatState().selectedVoiceId,
-        },
+        value: request,
     });
 }
 
@@ -53,6 +64,9 @@ function startSpeech(record) {
  * @returns {void}
  */
 function handleSpeechStateMessage(message) {
+    dispatchChatState('setSpeechBackend', {
+        backend: message.backend || 'server',
+    });
     dispatchChatState('setSpeechSupported', {
         supported: message.supported !== false,
     });
@@ -66,6 +80,9 @@ function handleSpeechStateMessage(message) {
     updateSpeechButtons();
     updateSpeechStatus(message);
     maybeRestartVoiceInputAfterSpeech(message);
+    if (!message.speaking) {
+        resetStreamingSpeech(message.messageId);
+    }
     if (message.error) {
         statusText.textContent = 'TTS unavailable: ' + message.error;
         clearVoiceInputAfterSpeech();
@@ -95,6 +112,9 @@ function updateSpeechStatus(message) {
  * @returns {void}
  */
 function stopSpeech() {
+    resetStreamingSpeech();
+    stopSpeechAudioPlayback();
+    stopSystemSpeechPlayback();
     vscode.postMessage({ type: 'stopSpeech' });
     clearVoiceInputAfterSpeech();
     dispatchChatState('setSpeakingMessage', { messageId: '' });

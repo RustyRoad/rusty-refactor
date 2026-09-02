@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
+use std::path::Path;
 
 /// Describes one installed text-to-speech voice.
 #[derive(Debug, Clone, Serialize)]
@@ -25,12 +26,22 @@ pub fn list_voices() -> Result<Vec<VoiceInfo>> {
     platform::list_voices()
 }
 
+/// Plays existing WAV audio without replacing its original synthesizer.
+pub fn play_wav_path(path: &Path) -> Result<()> {
+    platform::play_wav_path(path)
+}
+
+/// Plays in-memory WAV audio without changing its synthesizer.
+pub fn play_wav_bytes(bytes: &[u8]) -> Result<()> {
+    platform::play_wav_bytes(bytes)
+}
+
 #[cfg(windows)]
 mod platform {
     use super::VoiceInfo;
     use anyhow::{bail, Context, Result};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use windows::core::{HSTRING, PCWSTR};
     use windows::Media::SpeechSynthesis::{
         SpeechSynthesisStream,
@@ -91,6 +102,23 @@ mod platform {
         let voices = installed_voices()?;
 
         voices.iter().map(voice_info).collect()
+    }
+
+    /// Plays an existing WAV through the active Windows output device.
+    pub fn play_wav_path(path: &Path) -> Result<()> {
+        if !path.is_file() {
+            bail!("speech WAV file was not found");
+        }
+        play_wav_file(path)
+    }
+
+    /// Writes and plays in-memory WAV bytes through the active device.
+    pub fn play_wav_bytes(bytes: &[u8]) -> Result<()> {
+        let path = temp_wav_path();
+        fs::write(&path, bytes).context("failed to write speech audio")?;
+        let play_result = play_wav_file(&path);
+        let _ = fs::remove_file(&path);
+        play_result
     }
 
     /// Selects the requested voice or a natural-preferred fallback.
@@ -241,11 +269,7 @@ mod platform {
     /// Plays a synthesized stream through WinMM as a temporary WAV file.
     fn play_stream(stream: SpeechSynthesisStream) -> Result<()> {
         let bytes = stream_bytes(&stream)?;
-        let path = temp_wav_path();
-        fs::write(&path, bytes).context("failed to write speech audio")?;
-        let play_result = play_wav_file(&path);
-        let _ = fs::remove_file(&path);
-        play_result
+        play_wav_bytes(&bytes)
     }
 
     /// Reads the entire speech stream into memory.
@@ -283,7 +307,7 @@ mod platform {
     }
 
     /// Blocks until WinMM finishes playing a WAV file.
-    fn play_wav_file(path: &PathBuf) -> Result<()> {
+    fn play_wav_file(path: &Path) -> Result<()> {
         let wide = wide_null(&path.to_string_lossy());
         let flags = SND_FILENAME | SND_NODEFAULT | SND_SYNC;
         let played = unsafe {
@@ -316,6 +340,7 @@ mod platform {
 mod platform {
     use super::VoiceInfo;
     use anyhow::{bail, Result};
+    use std::path::Path;
 
     /// Returns unsupported outside Windows for this native implementation.
     pub fn speak_text(_text: &str, _voice_id: Option<&str>) -> Result<()> {
@@ -325,5 +350,15 @@ mod platform {
     /// Returns no voices outside Windows.
     pub fn list_voices() -> Result<Vec<VoiceInfo>> {
         Ok(Vec::new())
+    }
+
+    /// Returns unsupported for native WAV playback outside Windows.
+    pub fn play_wav_path(_path: &Path) -> Result<()> {
+        bail!("native WAV playback is currently implemented for Windows")
+    }
+
+    /// Returns unsupported for in-memory WAV playback outside Windows.
+    pub fn play_wav_bytes(_bytes: &[u8]) -> Result<()> {
+        bail!("native WAV playback is currently implemented for Windows")
     }
 }

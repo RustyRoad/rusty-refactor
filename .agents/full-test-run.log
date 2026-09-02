@@ -1,0 +1,66 @@
+
+> rusty-refactor@0.6.35 pretest
+> npm run build && npm run build:test
+
+
+> rusty-refactor@0.6.35 build
+> npm run build:napi && npm run build:rust && npm run build:ts
+
+
+> rusty-refactor@0.6.35 build:napi
+> cargo build --release --manifest-path rust-backend/napi_bridge/Cargo.toml && node scripts/copy-napi.js
+
+    Finished `release` profile [optimized] target(s) in 2.37s
+[copy-napi] win32-x64 → napi_bridge.win32-x64-msvc.node
+
+> rusty-refactor@0.6.35 build:rust
+> cargo build --release --manifest-path rust-backend/Cargo.toml
+
+warning: rusty_refactor_worker@0.1.0: rust-src component not found. Install with: rustup component add rust-src
+warning: rusty_refactor_worker@0.1.0: Internal compiler crates will not be available
+    Finished `release` profile [optimized] target(s) in 3.56s
+
+> rusty-refactor@0.6.35 build:ts
+> npm run build:tether-chat && rsbuild build
+
+
+> rusty-refactor@0.6.35 build:tether-chat
+> node scripts/build-chat-state.js
+
+generated media/chat-sidebar-state.generated.js
+Rsbuild v1.6.0
+
+(node:54072) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/riley/Documents/rusty-refactor/rsbuild.config.ts?t=1788110313905 is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\riley\Documents\rusty-refactor\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+info    build started...
+ready   built in [1m3.34[22m s[2m (extension)[22m
+ready   built in [1m3.35[22m s[2m (webview)[22m
+
+[34mFile (extension)   Size       [39m
+[2mout\[22m[36mextension.js[39m   921.8 kB
+
+
+[34mFile (webview)                           Size       Gzip   [39m
+[2mout\webview\[22m[32mchat-sidebar-markdown.html[39m   0.25 kB    [32m0.20 kB[39m
+[2mout\webview\[22m[32mmodule-extractor.html[39m        0.29 kB    [32m0.21 kB[39m
+[2mout\webview\[22m[33mmodule-extractor.css[39m         9.1 kB     [32m1.9 kB[39m
+[2mout\webview\[22m[36mmodule-extractor.js[39m          21.4 kB    [32m6.1 kB[39m
+[2mout\webview\[22m[36mchat-sidebar-markdown.js[39m     339.2 kB   [32m96.4 kB[39m
+
+                                [35mTotal:[39m   370.2 kB   [32m104.7 kB[39m
+
+
+> rusty-refactor@0.6.35 build:test
+> tsc -p ./tsconfig.test.json
+
+
+> rusty-refactor@0.6.35 test
+> node ./out/test/runTest.js
+
+- Resolving version...
+✔ Validated version: insiders
+✔ Found existing install in C:\Users\riley\Documents\rusty-refactor\.vscode-test\vscode-win32-x64-archive-insiders
+
+^C

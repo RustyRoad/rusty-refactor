@@ -207,8 +207,7 @@ export class AIDocGenerator {
                 messages,
                 {
                     filePaths: [sourceFilePath],
-                    transport: 'serve',
-                    allowCliFallback: false
+                    transport: 'serve'
                 },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
@@ -290,8 +289,7 @@ export class AIDocGenerator {
                 messages,
                 {
                     model: modelId,
-                    transport: 'serve',
-                    allowCliFallback: false
+                    transport: 'serve'
                 }
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
@@ -356,8 +354,7 @@ export class AIDocGenerator {
                 this.codetetherDocumentationMessages(prompt, languageId),
                 {
                     filePaths: [sourceFilePath],
-                    transport: 'serve',
-                    allowCliFallback: false
+                    transport: 'serve'
                 },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
@@ -726,8 +723,7 @@ export class AIDocGenerator {
                 this.codetetherDocumentationMessages(prompt, languageId),
                 {
                     filePaths: [sourceFilePath],
-                    transport: 'serve',
-                    allowCliFallback: false
+                    transport: 'serve'
                 },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
@@ -822,8 +818,7 @@ export class AIDocGenerator {
                 ],
                 {
                     filePaths: [sourceFilePath],
-                    transport: 'serve',
-                    allowCliFallback: false
+                    transport: 'serve'
                 },
             );
             const cleaned = this.cleanMarkdownCodeBlocks(
@@ -1292,10 +1287,10 @@ ${documentedCode}
      * Saves the selection to workspace settings.
      */
     async selectPreferredModel(): Promise<void> {
-        const items = [
+        const items = this.sortDocumentationModelItems([
             ...await this.codeTetherPickerItems(),
             ...await this.vscodePickerItems(),
-        ];
+        ]);
 
         if (items.length === 0) {
             vscode.window.showWarningMessage(
@@ -1305,6 +1300,8 @@ ${documentedCode}
         }
 
         const selected = await vscode.window.showQuickPick(items, {
+            matchOnDescription: true,
+            matchOnDetail: true,
             placeHolder: 'Select your preferred AI model for documentation',
             title: 'Choose AI Model'
         });
@@ -1331,6 +1328,47 @@ ${documentedCode}
                 logToOutput(`Error saving aiPreferredModel: ${errorMsg}`);
             }
         }
+    }
+
+    /**
+     * Sorts picker items so provider groups stay together while searching.
+     */
+    private sortDocumentationModelItems(
+        items: DocumentationModelPickerItem[]
+    ): DocumentationModelPickerItem[] {
+        return [...items].sort((left, right) => {
+            const provider = this.modelProvider(left.modelId)
+                .localeCompare(this.modelProvider(right.modelId));
+
+            if (provider !== 0) {
+                return provider;
+            }
+
+            const source = this.modelSourceRank(left.source)
+                - this.modelSourceRank(right.source);
+
+            if (source !== 0) {
+                return source;
+            }
+
+            return left.label.localeCompare(right.label);
+        });
+    }
+
+    /**
+     * Extracts a provider prefix from a provider/model identifier.
+     */
+    private modelProvider(modelId: string): string {
+        return modelId.split('/')[0]?.toLowerCase() || 'other';
+    }
+
+    /**
+     * Keeps CodeTether-backed models ahead of VS Code duplicates.
+     */
+    private modelSourceRank(
+        source: DocumentationModelPickerItem['source']
+    ): number {
+        return source === 'codeTether' ? 0 : 1;
     }
 
     /**

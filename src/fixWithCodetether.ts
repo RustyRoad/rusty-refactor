@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { CodetetherClient } from './codetetherClient';
+import { requestCodetetherFix } from './codetetherFixRequest';
 import { logToOutput } from './extractor';
+import { isTodoDiagnostic } from './todoDiagnostic';
+import type {
+    WorkspaceFileChangeObserver
+} from './workspaceFileChangeService';
 
 function logFixStatus(scope: 'Fix' | 'Fix All', relativePath: string, message: string): void {
     logToOutput(`[Codetether ${scope}] ${relativePath} - ${message}`);
@@ -211,10 +216,14 @@ interface CodetetherTaskResult {
     diagnosticsAfter: readonly vscode.Diagnostic[];
 }
 
+/**
+ * Executes one fix request and observes its resulting editor diagnostics.
+ */
 async function runCodetetherTask(
     uri: vscode.Uri,
     prompt: string,
     scope: 'Fix' | 'Fix All',
+    workspaceFiles?: WorkspaceFileChangeObserver,
     progress?: vscode.Progress<{ message?: string; increment?: number }>
 ): Promise<CodetetherTaskResult> {
     const document = await vscode.workspace.openTextDocument(uri);
@@ -226,6 +235,7 @@ async function runCodetetherTask(
     const wasDirty = document.isDirty;
     await ensureDocumentSaved(document);
     const beforeText = document.getText();
+    const changeMarker = workspaceFiles?.mark() || 0;
     const diagnosticsBefore = vscode.languages.getDiagnostics(uri);
     logFixStatus(scope, relativePath, wasDirty ? 'Saved dirty document before dispatch.' : 'Document already saved.');
     logFixStatus(scope, relativePath, `Diagnostics before task: ${summarizeDiagnostics(diagnosticsBefore)}.`);
@@ -233,18 +243,17 @@ async function runCodetetherTask(
     const client = new CodetetherClient();
     progress?.report({ message: 'Sending task to Codetether...' });
     logFixStatus(scope, relativePath, `Dispatching task to Codetether (${prompt.length} chars).`);
-    const response = await client.chatCompletion(
-        [
-            {
-                role: 'system',
-                content: 'You are a workspace-editing coding agent. Make the requested code changes in the workspace, let validation complete, and then summarize what changed.'
-            },
-            { role: 'user', content: prompt }
-        ],
-        { filePaths: [uri.fsPath], transport: 'serve' }
+    const response = await requestCodetetherFix(
+        client,
+        uri.fsPath,
+        prompt
     );
 
     progress?.report({ message: 'Waiting for file updates...' });
+    await workspaceFiles?.observeAfterToolActivity(
+        changeMarker,
+        `quick ${scope.toLowerCase()}`
+    );
     logFixStatus(scope, relativePath, 'Task returned completed; waiting for VS Code to observe file changes.');
     const updatedDocument = await waitForDocumentUpdate(uri, beforeText);
     progress?.report({ message: 'Waiting for diagnostics...' });
@@ -271,7 +280,10 @@ export class CodetetherCodeActionProvider implements vscode.CodeActionProvider {
         vscode.CodeActionKind.QuickFix
     ];
 
-    provideCodeActions(
+    /**
+     * Creates generic Codetether fixes for non-TODO diagnostics.
+     */
+    public provideCodeActions(
         document: vscode.TextDocument,
         range: vscode.Range | vscode.Selection,
         context: vscode.CodeActionContext,
@@ -282,22 +294,25 @@ export class CodetetherCodeActionProvider implements vscode.CodeActionProvider {
             return [];
         }
 
-        if (context.diagnostics.length === 0) {
+        const diagnostics = context.diagnostics.filter(diagnostic => {
+            return !isTodoDiagnostic(diagnostic);
+        });
+        if (diagnostics.length === 0) {
             return [];
         }
 
         const fixActions: vscode.CodeAction[] = [];
-        const diagnostic = context.diagnostics[0];
+        const diagnostic = diagnostics[0];
 
-        if (context.diagnostics.length > 1) {
+        if (diagnostics.length > 1) {
             const fixAllAction = new vscode.CodeAction(
-                `Fix All ${context.diagnostics.length} Errors with Codetether`,
+                `Fix All ${diagnostics.length} Errors with Codetether`,
                 vscode.CodeActionKind.QuickFix
             );
             fixAllAction.command = {
                 command: 'rustyRefactor.fixAllWithCodetether',
                 title: 'Fix All with Codetether',
-                arguments: [document.uri, context.diagnostics, range]
+                arguments: [document.uri, diagnostics, range]
             };
             fixActions.push(fixAllAction);
         }
@@ -326,7 +341,8 @@ export async function handleFixWithCodetether(
     uri: vscode.Uri,
     diagnostic: vscode.Diagnostic,
     _range: vscode.Range,
-    autoApply = false
+    autoApply = false,
+    workspaceFiles?: WorkspaceFileChangeObserver
 ): Promise<boolean> {
     const relativePath = vscode.workspace.asRelativePath(uri, false);
     const prompt = buildSingleFixPrompt(relativePath, diagnostic);
@@ -370,7 +386,13 @@ export async function handleFixWithCodetether(
         },
         async (progress) => {
             try {
-                return await runCodetetherTask(uri, prompt, 'Fix', progress);
+                return await runCodetetherTask(
+                    uri,
+                    prompt,
+                    'Fix',
+                    workspaceFiles,
+                    progress
+                );
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 logFixStatus('Fix', relativePath, `Task failed: ${message}`);
@@ -416,7 +438,8 @@ export async function handleFixAllWithCodetether(
     uri: vscode.Uri,
     diagnostics: readonly vscode.Diagnostic[],
     _range: vscode.Range,
-    autoApply = false
+    autoApply = false,
+    workspaceFiles?: WorkspaceFileChangeObserver
 ): Promise<void> {
     const relativePath = vscode.workspace.asRelativePath(uri, false);
     const prompt = buildFixAllPrompt(relativePath, diagnostics);
@@ -456,7 +479,13 @@ export async function handleFixAllWithCodetether(
         },
         async (progress) => {
             try {
-                return await runCodetetherTask(uri, prompt, 'Fix All', progress);
+                return await runCodetetherTask(
+                    uri,
+                    prompt,
+                    'Fix All',
+                    workspaceFiles,
+                    progress
+                );
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 logFixStatus('Fix All', relativePath, `Task failed: ${message}`);

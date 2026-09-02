@@ -198,16 +198,171 @@ function applyToolResult(
     event: CodetetherToolEvent
 ): void {
     const row = rows.get(event.id);
+    const resultRows = activitiesFromAgentResult(event);
+    if (resultRows !== undefined) {
+        rows.delete(event.id);
+        for (const resultRow of resultRows) {
+            rows.set(resultRow.id, resultRow);
+        }
+        return;
+    }
     if (!row) {
         return;
     }
 
+    const failed = resultLooksFailed(event.content);
     rows.set(event.id, {
         ...row,
-        status: resultLooksFailed(event.content) ? 'failed' : 'completed',
-        detail: summarizeText(event.content) || row.detail,
+        status: failed ? 'failed' : 'completed',
+        detail: toolResultDetail(row, event.content, failed),
         updatedAt: new Date().toISOString()
     });
+}
+
+/**
+ * Converts structured `agent` tool output into panel-ready activity rows.
+ *
+ * An undefined result means the payload is not a recognized agent snapshot;
+ * an empty array means the snapshot is valid but currently contains no agents.
+ */
+function activitiesFromAgentResult(
+    event: CodetetherToolEvent
+): CodetetherSubagentActivity[] | undefined {
+    if (event.name !== 'agent') {
+        return undefined;
+    }
+    const parsed = parseToolResult(event.content);
+    const records = agentResultRecords(parsed);
+    if (!records) {
+        return undefined;
+    }
+    return records
+        .filter(looksLikeAgentRecord)
+        .map((record, index) => {
+            return activityFromAgentRecord(record, index);
+        });
+}
+
+/**
+ * Reads an agent result as an array or one of its common collection wrappers.
+ */
+function agentResultRecords(
+    parsed: unknown
+): Record<string, unknown>[] | undefined {
+    if (Array.isArray(parsed)) {
+        return parsed.filter(isRecord);
+    }
+    if (!isRecord(parsed)) {
+        return undefined;
+    }
+    for (const key of ['agents', 'items', 'results', 'subagents']) {
+        const value = parsed[key];
+        if (Array.isArray(value)) {
+            return value.filter(isRecord);
+        }
+    }
+    return looksLikeAgentRecord(parsed) ? [parsed] : undefined;
+}
+
+/**
+ * Narrows untrusted JSON values to plain activity record candidates.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value)
+        && typeof value === 'object'
+        && !Array.isArray(value);
+}
+
+/**
+ * Identifies agent-list records without accepting arbitrary result objects.
+ */
+function looksLikeAgentRecord(record: Record<string, unknown>): boolean {
+    return Boolean(
+        stringField(record, 'agent_id')
+        || stringField(record, 'session_id')
+        || stringField(record, 'session_title')
+        || stringField(record, 'current_tool')
+    );
+}
+
+/**
+ * Converts one untrusted agent snapshot into the sidebar activity contract.
+ */
+function activityFromAgentRecord(
+    record: Record<string, unknown>,
+    index: number
+): CodetetherSubagentActivity {
+    const agentId = stringField(record, 'agent_id');
+    const sessionId = stringField(record, 'session_id');
+    return {
+        id: `agent-${agentId || sessionId || index + 1}`,
+        name: stringField(record, 'name')
+            || stringField(record, 'session_title')
+            || 'Sub-agent',
+        status: agentRecordStatus(record),
+        detail: agentRecordDetail(record),
+        updatedAt: stringField(record, 'updated_at')
+            || new Date().toISOString(),
+        source: stringField(record, 'transport') || 'agent',
+        model: stringField(record, 'model') || undefined,
+        sessionId: sessionId || undefined
+    };
+}
+
+/**
+ * Maps runtime-specific lifecycle labels into the sidebar status vocabulary.
+ */
+function agentRecordStatus(
+    record: Record<string, unknown>
+): CodetetherSubagentStatus {
+    const status = stringField(record, 'status').toLowerCase();
+    if (['completed', 'complete', 'done', 'success'].includes(status)) {
+        return 'completed';
+    }
+    if (['failed', 'error', 'rejected', 'stopped'].includes(status)) {
+        return 'failed';
+    }
+    if (['pending', 'queued', 'starting'].includes(status)) {
+        return 'pending';
+    }
+    return 'running';
+}
+
+/**
+ * Chooses a concise human-readable detail from one agent runtime snapshot.
+ */
+function agentRecordDetail(record: Record<string, unknown>): string {
+    const tool = stringField(record, 'current_tool');
+    if (tool) {
+        return `Running ${tool}.`;
+    }
+    if (record.needs_interaction === true) {
+        return 'Waiting for interaction.';
+    }
+    if (record.lagging === true) {
+        return 'Agent is lagging behind.';
+    }
+    const title = stringField(record, 'session_title');
+    const name = stringField(record, 'name');
+    if (title && title !== name) {
+        return summarizeText(title);
+    }
+    const status = stringField(record, 'status');
+    return status ? `Agent is ${status}.` : 'Agent activity available.';
+}
+
+/**
+ * Formats an unstructured result without exposing serialized JSON in a card.
+ */
+function toolResultDetail(
+    row: CodetetherSubagentActivity,
+    content: string | undefined,
+    failed: boolean
+): string {
+    if (parseToolResult(content) !== undefined) {
+        return failed ? 'Sub-agent failed.' : 'Sub-agent completed.';
+    }
+    return summarizeText(content) || row.detail;
 }
 
 /**
@@ -325,6 +480,17 @@ function parseToolArguments(rawArguments = ''): Record<string, unknown> {
     }
 
     return {};
+}
+
+/**
+ * Parses structured tool output without assuming an object-shaped result.
+ */
+function parseToolResult(rawResult = ''): unknown {
+    try {
+        return JSON.parse(rawResult);
+    } catch {
+        return undefined;
+    }
 }
 
 /**

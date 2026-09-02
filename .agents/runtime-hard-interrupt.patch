@@ -1,0 +1,564 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7b80d6a3..6c48876a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -230,11 +230,14 @@ windows = { version = "0.62.2", features = [
+     "Win32_Graphics_Gdi",
+     "Win32_System_Com",
+     "Win32_System_DataExchange",
++    "Win32_System_JobObjects",
+     "Win32_System_Diagnostics_ToolHelp",
+     "Win32_System_Memory",
+     "Win32_System_Registry",
++    "Win32_System_Threading",
+     "Win32_UI_Input_KeyboardAndMouse",
+     "Win32_UI_WindowsAndMessaging",
++    "Win32_Security",
+ ] }
+ 
+ [target.'cfg(unix)'.dependencies]
+diff --git a/src/tool/mod.rs b/src/tool/mod.rs
+index 4c90bc85..f50a4687 100644
+--- a/src/tool/mod.rs
++++ b/src/tool/mod.rs
+@@ -53,6 +53,7 @@ pub mod progress;
+ pub mod question;
+ pub mod ralph;
+ pub mod readonly;
++mod process_tree;
+ mod register_media;
+ mod register_search_tools;
+ pub mod relay_autochat;
+diff --git a/src/tool/process_tree.rs b/src/tool/process_tree.rs
+new file mode 100644
+index 00000000..989c9e71
+--- /dev/null
++++ b/src/tool/process_tree.rs
+@@ -0,0 +1,57 @@
++//! Cancellation-safe ownership of tool subprocess trees.
++
++use tokio::process::{Child, Command};
++
++#[cfg(not(any(unix, windows)))]
++#[path = "process_tree/fallback.rs"]
++mod platform;
++#[cfg(unix)]
++#[path = "process_tree/unix.rs"]
++mod platform;
++#[cfg(windows)]
++#[path = "process_tree/windows.rs"]
++mod platform;
++
++#[cfg(test)]
++#[path = "process_tree/tests.rs"]
++mod tests;
++
++/// Configures a command so dropping its owner stops the immediate child.
++pub(super) fn configure(command: &mut Command) {
++    command.kill_on_drop(true);
++    platform::configure(command);
++}
++
++/// Kills a configured command's descendants unless normal exit disarms it.
++pub(super) struct Guard {
++    platform: platform::Guard,
++    armed: bool,
++}
++
++impl Guard {
++    /// Starts tracking the process tree rooted at `child`.
++    pub(super) fn attach(child: &Child) -> Self {
++        Self {
++            platform: platform::Guard::attach(child.id()),
++            armed: true,
++        }
++    }
++
++    /// Preserves surviving descendants after a normal command exit.
++    pub(super) fn disarm(&mut self) {
++        if !self.armed {
++            return;
++        }
++        self.platform.disarm();
++        self.armed = false;
++    }
++}
++
++impl Drop for Guard {
++    /// Terminates the owned process tree when its execution future is dropped.
++    fn drop(&mut self) {
++        if self.armed {
++            self.platform.terminate();
++        }
++    }
++}
+diff --git a/src/tool/process_tree/fallback.rs b/src/tool/process_tree/fallback.rs
+new file mode 100644
+index 00000000..5f8da7a1
+--- /dev/null
++++ b/src/tool/process_tree/fallback.rs
+@@ -0,0 +1,22 @@
++//! Immediate-child fallback for platforms without process-tree primitives.
++
++use tokio::process::Command;
++
++/// No-op descendant guard; `kill_on_drop` still owns the immediate child.
++pub(super) struct Guard;
++
++impl Guard {
++    /// Creates the fallback guard without a platform process identifier.
++    pub(super) fn attach(_pid: Option<u32>) -> Self {
++        Self
++    }
++
++    /// Completes fallback tracking after normal process exit.
++    pub(super) fn disarm(&mut self) {}
++
++    /// Relies on the Tokio child owner's `kill_on_drop` behavior.
++    pub(super) fn terminate(&mut self) {}
++}
++
++/// Requires no platform-specific command setup.
++pub(super) fn configure(_command: &mut Command) {}
+diff --git a/src/tool/process_tree/unix.rs b/src/tool/process_tree/unix.rs
+new file mode 100644
+index 00000000..9f235d65
+--- /dev/null
++++ b/src/tool/process_tree/unix.rs
+@@ -0,0 +1,47 @@
++//! Unix process-group ownership for cancellable tool processes.
++
++use std::io;
++use std::os::unix::process::CommandExt;
++
++use tokio::process::Command;
++
++/// Tracks the process group rooted at a configured command.
++pub(super) struct Guard {
++    pid: Option<i32>,
++}
++
++impl Guard {
++    /// Records the process-group leader created by `configure`.
++    pub(super) fn attach(pid: Option<u32>) -> Self {
++        Self {
++            pid: pid.and_then(|pid| i32::try_from(pid).ok()),
++        }
++    }
++
++    /// Forgets a normally completed process group.
++    pub(super) fn disarm(&mut self) {
++        self.pid = None;
++    }
++
++    /// Sends SIGKILL to the complete process group.
++    pub(super) fn terminate(&mut self) {
++        if let Some(pid) = self.pid.take() {
++            // SAFETY: a negative PID targets the process group created below.
++            let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
++        }
++    }
++}
++
++/// Starts the child as a process-group leader for descendant cancellation.
++pub(super) fn configure(command: &mut Command) {
++    // SAFETY: `pre_exec` calls only the async-signal-safe `setsid` function.
++    unsafe {
++        command.pre_exec(|| {
++            if libc::setsid() == -1 {
++                Err(io::Error::last_os_error())
++            } else {
++                Ok(())
++            }
++        });
++    }
++}
+diff --git a/src/tool/process_tree/windows.rs b/src/tool/process_tree/windows.rs
+new file mode 100644
+index 00000000..c38a229b
+--- /dev/null
++++ b/src/tool/process_tree/windows.rs
+@@ -0,0 +1,119 @@
++//! Windows Job Object ownership for cancellable tool processes.
++
++use std::io;
++use std::process::{Command as StdCommand, Stdio};
++
++use tokio::process::Command;
++use windows::Win32::Foundation::{CloseHandle, HANDLE};
++use windows::Win32::System::JobObjects::{
++    AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
++};
++use windows::Win32::System::Threading::{
++    OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
++};
++use windows::core::PCWSTR;
++
++/// Job handle whose explicit lifetime defines descendant ownership.
++struct JobHandle(HANDLE);
++
++// SAFETY: Windows kernel handles may be used and closed from any thread.
++unsafe impl Send for JobHandle {}
++
++impl Drop for JobHandle {
++    /// Releases the kernel handle without implicitly terminating the job.
++    fn drop(&mut self) {
++        let _ = unsafe { CloseHandle(self.0) };
++    }
++}
++
++/// Tracks a child with a Job Object, falling back to `taskkill /T`.
++pub(super) struct Guard {
++    pid: Option<u32>,
++    job: Option<JobHandle>,
++}
++
++impl Guard {
++    /// Assigns the root process to a private Job Object when possible.
++    pub(super) fn attach(pid: Option<u32>) -> Self {
++        let job = pid.and_then(|pid| match create_job(pid) {
++            Ok(job) => Some(job),
++            Err(error) => {
++                tracing::warn!(
++                    pid,
++                    error = %error,
++                    "Falling back to taskkill for process-tree cancellation"
++                );
++                None
++            }
++        });
++        Self { pid, job }
++    }
++
++    /// Closes tracking after normal completion without killing descendants.
++    pub(super) fn disarm(&mut self) {
++        self.job = None;
++        self.pid = None;
++    }
++
++    /// Terminates every process assigned beneath the command root.
++    pub(super) fn terminate(&mut self) {
++        if let Some(job) = self.job.take() {
++            if unsafe { TerminateJobObject(job.0, 1) }.is_ok() {
++                self.pid = None;
++                return;
++            }
++        }
++        if let Some(pid) = self.pid.take() {
++            terminate_with_taskkill(pid);
++        }
++    }
++}
++
++/// Leaves command creation unchanged until its PID can be assigned.
++pub(super) fn configure(_command: &mut Command) {}
++
++/// Creates a Job Object and assigns the process rooted at `pid`.
++fn create_job(pid: u32) -> io::Result<JobHandle> {
++    let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
++        .map_err(windows_error)?;
++    let process = match unsafe {
++        OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
++    } {
++        Ok(process) => process,
++        Err(error) => {
++            let _ = unsafe { CloseHandle(job) };
++            return Err(windows_error(error));
++        }
++    };
++    let assigned = unsafe { AssignProcessToJobObject(job, process) };
++    let _ = unsafe { CloseHandle(process) };
++    match assigned {
++        Ok(()) => Ok(JobHandle(job)),
++        Err(error) => {
++            let _ = unsafe { CloseHandle(job) };
++            Err(windows_error(error))
++        }
++    }
++}
++
++/// Converts a Windows API failure into the tool's I/O error surface.
++fn windows_error(error: windows::core::Error) -> io::Error {
++    io::Error::other(error.to_string())
++}
++
++/// Kills a process tree when Job Object assignment was unavailable.
++fn terminate_with_taskkill(pid: u32) {
++    let status = StdCommand::new("taskkill.exe")
++        .args(["/PID", &pid.to_string(), "/T", "/F"])
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .status();
++    if let Err(error) = status {
++        tracing::warn!(
++            pid,
++            error = %error,
++            "Failed to terminate cancelled process tree"
++        );
++    }
++}
+diff --git a/src/tool/process_tree/tests.rs b/src/tool/process_tree/tests.rs
+new file mode 100644
+index 00000000..ba62be8e
+--- /dev/null
++++ b/src/tool/process_tree/tests.rs
+@@ -0,0 +1,108 @@
++//! Process-tree cancellation integration coverage.
++
++use std::path::Path;
++
++use tempfile::TempDir;
++use tokio::process::Command;
++use tokio::time::{Duration, Instant, sleep};
++
++use super::{Guard, configure};
++
++/// Proves dropping an armed guard prevents a descendant from surviving.
++#[cfg(any(unix, windows))]
++#[tokio::test]
++async fn dropping_guard_kills_descendant_tree() {
++    let temp = tempfile::tempdir().expect("create process-tree fixture");
++    let started = temp.path().join("started.txt");
++    let survived = temp.path().join("survived.txt");
++    let mut command = descendant_command(&temp, &started, &survived);
++    configure(&mut command);
++    let child = command.spawn().expect("spawn process-tree fixture");
++    let guard = Guard::attach(&child);
++
++    wait_for_file(&started).await;
++    drop(guard);
++    drop(child);
++    sleep(Duration::from_millis(1_600)).await;
++
++    assert!(
++        !survived.exists(),
++        "descendant continued after its process-tree guard was dropped"
++    );
++}
++
++/// Waits for a descendant marker without relying on fixed startup timing.
++async fn wait_for_file(path: &Path) {
++    let deadline = Instant::now() + Duration::from_secs(5);
++    while !path.exists() && Instant::now() < deadline {
++        sleep(Duration::from_millis(20)).await;
++    }
++    assert!(path.exists(), "descendant process never started");
++}
++
++/// Builds a parent command that waits on a marker-writing descendant.
++#[cfg(windows)]
++fn descendant_command(temp: &TempDir, started: &Path, survived: &Path) -> Command {
++    let child_script = temp.path().join("child.ps1");
++    let parent_script = temp.path().join("parent.ps1");
++    std::fs::write(
++        &child_script,
++        concat!(
++            "Set-Content -LiteralPath $env:CT_TREE_STARTED -Value started\n",
++            "Start-Sleep -Milliseconds 1200\n",
++            "Set-Content -LiteralPath $env:CT_TREE_SURVIVED -Value survived\n",
++        ),
++    )
++    .expect("write child process script");
++    std::fs::write(
++        &parent_script,
++        concat!(
++            "Start-Sleep -Milliseconds 300\n",
++            "& powershell.exe -NoProfile -File $env:CT_TREE_CHILD\n",
++        ),
++    )
++    .expect("write parent process script");
++
++    let mut command = Command::new("powershell.exe");
++    command
++        .args(["-NoProfile", "-File"])
++        .arg(parent_script)
++        .env("CT_TREE_CHILD", child_script)
++        .env("CT_TREE_STARTED", started)
++        .env("CT_TREE_SURVIVED", survived);
++    command
++}
++
++/// Builds the equivalent process-tree fixture for Unix validation.
++#[cfg(unix)]
++fn descendant_command(temp: &TempDir, started: &Path, survived: &Path) -> Command {
++    let child_script = temp.path().join("child.sh");
++    let parent_script = temp.path().join("parent.sh");
++    std::fs::write(
++        &child_script,
++        concat!(
++            "#!/bin/sh\n",
++            "touch \"$CT_TREE_STARTED\"\n",
++            "sleep 1.2\n",
++            "touch \"$CT_TREE_SURVIVED\"\n",
++        ),
++    )
++    .expect("write child process script");
++    std::fs::write(
++        &parent_script,
++        concat!(
++            "#!/bin/sh\n",
++            "sleep 0.3\n",
++            "sh \"$CT_TREE_CHILD\"\n",
++        ),
++    )
++    .expect("write parent process script");
++
++    let mut command = Command::new("sh");
++    command
++        .arg(parent_script)
++        .env("CT_TREE_CHILD", child_script)
++        .env("CT_TREE_STARTED", started)
++        .env("CT_TREE_SURVIVED", survived);
++    command
++}
+diff --git a/src/tool/bash_noninteractive.rs b/src/tool/bash_noninteractive.rs
+index 954fb1d5..9eed4f8f 100644
+--- a/src/tool/bash_noninteractive.rs
++++ b/src/tool/bash_noninteractive.rs
+@@ -6,7 +6,7 @@ use tokio::process::Command;
+ pub(super) fn configure(cmd: &mut Command) {
+     configure_stdio(cmd);
+     configure_auth_env(cmd);
+-    detach_controlling_terminal(cmd);
++    super::process_tree::configure(cmd);
+ }
+ 
+ fn configure_stdio(cmd: &mut Command) {
+@@ -23,22 +23,3 @@ fn configure_auth_env(cmd: &mut Command) {
+         .env("SUDO_ASKPASS", "/bin/false")
+         .env("SSH_ASKPASS", "/bin/false");
+ }
+-
+-#[cfg(unix)]
+-fn detach_controlling_terminal(cmd: &mut Command) {
+-    // SAFETY: `pre_exec` runs after fork in the child. The closure only calls
+-    // `setsid` and converts errno, which keeps it async-signal-safe enough for
+-    // this child-process setup hook.
+-    unsafe {
+-        cmd.pre_exec(|| {
+-            if libc::setsid() == -1 {
+-                Err(std::io::Error::last_os_error())
+-            } else {
+-                Ok(())
+-            }
+-        });
+-    }
+-}
+-
+-#[cfg(not(unix))]
+-fn detach_controlling_terminal(_cmd: &mut Command) {}
+diff --git a/src/tool/bash_capture/run.rs b/src/tool/bash_capture/run.rs
+index 6eab2844..a1b323bc 100644
+--- a/src/tool/bash_capture/run.rs
++++ b/src/tool/bash_capture/run.rs
+@@ -10,11 +10,15 @@ pub(in crate::tool::bash) async fn run(
+     timeout_secs: u64,
+     max_bytes: usize,
+ ) -> io::Result<CaptureOutcome> {
+-    cmd.kill_on_drop(true);
+     let child = cmd.spawn()?;
++    let mut process_tree = crate::tool::process_tree::Guard::attach(&child);
+     let capture = super::capture_child(child, max_bytes);
+     match timeout(Duration::from_secs(timeout_secs), capture).await {
+-        Ok(result) => result.map(CaptureOutcome::Finished),
++        Ok(Ok(result)) => {
++            process_tree.disarm();
++            Ok(CaptureOutcome::Finished(result))
++        }
++        Ok(Err(error)) => Err(error),
+         Err(_) => Ok(CaptureOutcome::TimedOut),
+     }
+ }
+diff --git a/src/tool/sandbox_process.rs b/src/tool/sandbox_process.rs
+index bfd43413..bd5af2ad 100644
+--- a/src/tool/sandbox_process.rs
++++ b/src/tool/sandbox_process.rs
+@@ -8,13 +8,20 @@ pub(super) async fn wait(
+     violations: &mut Vec<String>,
+ ) -> Result<Output> {
+     let timeout = std::time::Duration::from_secs(timeout_secs);
+-    cmd.kill_on_drop(true);
++    super::process_tree::configure(&mut cmd);
+     let child = cmd.spawn().context("Failed to spawn sandboxed process")?;
+-    tokio::time::timeout(timeout, child.wait_with_output())
+-        .await
+-        .map_err(|_| {
++    let mut process_tree = super::process_tree::Guard::attach(&child);
++    match tokio::time::timeout(timeout, child.wait_with_output()).await {
++        Ok(Ok(output)) => {
++            process_tree.disarm();
++            Ok(output)
++        }
++        Ok(Err(error)) => Err(error).context("Failed to wait for sandboxed process"),
++        Err(_) => {
+             violations.push("timeout_exceeded".to_string());
+-            anyhow!("Sandboxed process timed out after {timeout_secs}s")
+-        })?
+-        .context("Failed to wait for sandboxed process")
++            Err(anyhow!(
++                "Sandboxed process timed out after {timeout_secs}s"
++            ))
++        }
++    }
+ }
+diff --git a/src/tool/sandbox_spawn.rs b/src/tool/sandbox_spawn.rs
+index 4c094678..2165aef8 100644
+--- a/src/tool/sandbox_spawn.rs
++++ b/src/tool/sandbox_spawn.rs
+@@ -46,6 +46,7 @@ pub(crate) async fn spawn(
+         .transpose()?;
+     let mut unsafe_fallbacks = state.unsafe_fallbacks;
+     unsafe_fallbacks.extend(limits);
++    super::process_tree::configure(&mut cmd);
+     let child = cmd.spawn().context("Failed to spawn sandboxed process")?;
+     Ok(Spawned {
+         child,
+diff --git a/src/tool/command_session/running.rs b/src/tool/command_session/running.rs
+index 45c63515..3798d315 100644
+--- a/src/tool/command_session/running.rs
++++ b/src/tool/command_session/running.rs
+@@ -12,6 +12,7 @@ mod attached;
+ mod write;
+ 
+ pub(crate) struct Running {
++    pub(super) process_tree: crate::tool::process_tree::Guard,
+     pub(super) child: tokio::process::Child,
+     pub(super) stdin: Option<CommandInput>,
+     pub(super) output: tokio::sync::mpsc::Receiver<Vec<u8>>,
+@@ -28,6 +29,7 @@ impl Running {
+         let stdout = child.stdout.take();
+         let stderr = child.stderr.take();
+         Self {
++            process_tree: crate::tool::process_tree::Guard::attach(&child),
+             child,
+             stdin,
+             output: super::readers::start(stdout, stderr),
+diff --git a/src/tool/command_session/running/attached.rs b/src/tool/command_session/running/attached.rs
+index 6936592b..7490f844 100644
+--- a/src/tool/command_session/running/attached.rs
++++ b/src/tool/command_session/running/attached.rs
+@@ -14,6 +14,7 @@ pub(super) fn new(
+         Some(crate::tool::command_pty::Attached::Pty(master)) => {
+             let (stdin, output) = super::super::readers::terminal(master)?;
+             Ok(Running {
++                process_tree: crate::tool::process_tree::Guard::attach(&child),
+                 child,
+                 stdin: Some(stdin),
+                 output,
+diff --git a/src/tool/command_session/drain.rs b/src/tool/command_session/drain.rs
+index 1f037b84..75685f81 100644
+--- a/src/tool/command_session/drain.rs
++++ b/src/tool/command_session/drain.rs
+@@ -41,9 +41,11 @@
+ fn refresh_status(command: &mut Running) -> std::io::Result<bool> {
+     if command.exit_code.is_none()
+         && let Some(status) = command.child.try_wait()?
+     {
+         command.exit_code = Some(status.code().unwrap_or(-1));
++        command.process_tree.disarm();
+         command.stdin = None;
+     }
+     Ok(command.exit_code.is_some())
+ }
++

@@ -13,9 +13,15 @@ function byId(id) {
 const chatContainer = byId('chat-container');
 const promptInput = byId('prompt-input');
 const modelInput = byId('model-input');
+const modelSearchInput = byId('model-search-input');
 const customModelInput = byId('custom-model-input');
 const providerStrip = byId('provider-strip');
 const modelMeta = byId('model-meta');
+const modelRuntimeOptions = byId('model-runtime-options');
+const modelThinkingRow = byId('model-thinking-row');
+const modelThinkingInput = byId('model-thinking-input');
+const modelServiceTierRow = byId('model-service-tier-row');
+const modelServiceTierInput = byId('model-service-tier-input');
 const statusBar = byId('status-bar');
 const statusText = byId('status');
 const modelCaption = byId('model-caption');
@@ -27,6 +33,13 @@ const modeInput = byId('mode-input');
 const featureInput = byId('feature-input');
 const sessionsList = byId('sessions-list');
 const sessionsCaption = byId('sessions-caption');
+const activeSessionsList = byId('active-sessions-list');
+const activeSessionsCount = byId('active-sessions-count');
+const previousSessionsCount = byId('previous-sessions-count');
+const activeSessionsTab = byId('active-sessions-tab');
+const previousSessionsTab = byId('previous-sessions-tab');
+const activeSessionsView = byId('active-sessions-view');
+const previousSessionsView = byId('previous-sessions-view');
 const sessionIdInput = byId('session-id-input');
 const sessionIdOpenButton = byId('open-session-id-btn');
 const subagentPanel = byId('subagent-panel');
@@ -36,6 +49,7 @@ const subagentList = byId('subagent-list');
 const voiceInput = byId('voice-input');
 const voiceSourceInput = byId('voice-source-input');
 const voiceButton = byId('voice-btn');
+const interruptButton = byId('interrupt-btn');
 const chatStateApi = window.CodetetherChatState;
 let chatState = chatStateApi.createInitialState();
 
@@ -83,6 +97,20 @@ function getProvider(model) {
  */
 function getSelectedModel() {
     return chatStateApi.selectedModel(getChatState());
+}
+
+/**
+ * Resolves the explicit model identifier sent with the next request.
+ *
+ * A configured default is made explicit so the agent can inherit it for
+ * model-mandatory sub-agent spawns. Automatic routing remains unset because it
+ * has no concrete identifier until Codetether resolves the request.
+ *
+ * @returns {string} Explicit request model, or empty for automatic routing.
+ */
+function getRequestModel() {
+    const model = chatStateApi.effectiveModel(getChatState());
+    return model === 'automatic' ? '' : model;
 }
 
 /**
@@ -134,40 +162,4 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
-}
-
-/**
- * Renders one escaped fenced code block for the markdown subset.
- *
- * @param {string} _match - Full matched fenced code text.
- * @param {string} code - Captured code block body.
- * @returns {string} HTML for the fenced code block.
- */
-function renderCodeFence(_match, code) {
-    return '<pre><code>' + code.trim() + '</code></pre>';
-}
-
-/**
- * Renders the small markdown subset supported by the chat view.
- *
- * The renderer escapes all input before adding tags for fenced code, inline
- * code, bold text, paragraphs, and line breaks.
- *
- * @param {string} source - Assistant message text to render.
- * @returns {string} HTML string safe to assign to a message element.
- */
-function renderMarkdown(source) {
-    let text = escapeHtml(source || '');
-    const tick = String.fromCharCode(96);
-    const fence = new RegExp(
-        tick + tick + tick + '([\\s\\S]*?)' + tick + tick + tick,
-        'g',
-    );
-    const inlineCode = new RegExp(tick + '([^' + tick + ']+)' + tick, 'g');
-    text = text.replace(fence, renderCodeFence);
-    text = text.replace(inlineCode, '<code>$1</code>');
-    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    text = text.replace(/\n{2,}/g, '</p><p>');
-    text = text.replace(/\n/g, '<br>');
-    return '<p>' + text + '</p>';
 }

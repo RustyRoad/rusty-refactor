@@ -1,0 +1,21 @@
+[Unit]
+Description=Remote Employee CodeTether response TTS supervisor
+After=network-online.target remote-employee.service kokoro-tts.service
+Wants=network-online.target remote-employee.service kokoro-tts.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/riley/remote-employee-standalone
+Environment=VAULT_ADDR=https://vault.spotlessbinco.com/
+Environment=CODETETHER_DEFAULT_PROVIDER=openai-codex
+Environment=CODETETHER_DEFAULT_MODEL=openai-codex/gpt-5.6-sol-fast:high
+Environment=CODETETHER_OPENAI_CODEX_ALLOW_CHATGPT_BACKEND=1
+Environment=REMOTE_EMPLOYEE_TTS_URL=http://127.0.0.1:8016
+PassEnvironment=VAULT_TOKEN
+ExecStart=/usr/bin/python3 -m apps.remote_employee.presence_manager
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

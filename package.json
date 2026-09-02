@@ -2,7 +2,7 @@
   "name": "rusty-refactor",
   "displayName": "Rusty Refactor",
   "description": "Smart Rust code refactoring for RustyRoad - extract code to modules with intelligent type detection and file browsing",
-  "version": "0.6.23",
+  "version": "0.6.35",
   "publisher": "rusty-refactor",
   "repository": {
     "type": "git",
@@ -26,7 +26,10 @@
     "rails"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:rustyRefactor.documentWithCodetether",
+    "onCommand:rustyRefactor.openChat",
+    "onCommand:rustyRefactor.openChatInNewWindow",
     "onLanguage:rust",
     "onChatParticipant:rustyRefactor.codetether",
     "workspaceContains:**/Cargo.toml"
@@ -37,7 +40,7 @@
       "activitybar": [
         {
           "id": "rustyRefactor-sidebar",
-          "title": "Codetether Chat",
+          "title": "Rusty Refactor",
           "icon": "images/codetether-chat.svg"
         }
       ]
@@ -47,7 +50,7 @@
         {
           "type": "webview",
           "id": "rustyRefactor.chatView",
-          "name": "Codetether Chat",
+          "name": "Rusty Refactor",
           "icon": "images/codetether-chat.svg"
         }
       ]
@@ -62,6 +65,19 @@
       }
     ],
     "commands": [
+      {
+        "command": "rustyRefactor.openChat",
+        "title": "Open Rusty Refactor",
+        "icon": {
+          "light": "images/codetether-chat.svg",
+          "dark": "images/codetether-chat.svg"
+        }
+      },
+      {
+        "command": "rustyRefactor.openChatInNewWindow",
+        "title": "Rusty Refactor: Open Chat in New Window",
+        "icon": "$(open-preview)"
+      },
       {
         "command": "rustyRefactor.extractToModule",
         "title": "Rusty Refactor: Extract to Module"
@@ -89,6 +105,10 @@
       {
         "command": "rustyRefactor.configureCodetether",
         "title": "Rusty Refactor: Configure Codetether"
+      },
+      {
+        "command": "rustyRefactor.configureCodetetherVaultToken",
+        "title": "Rusty Refactor: Bootstrap Codetether Vault Access"
       },
       {
         "command": "rustyRefactor.fixWithCodetether",
@@ -279,6 +299,19 @@
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "rustyRefactor.openChatInNewWindow",
+          "when": "view == rustyRefactor.chatView",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "rustyRefactor.openChat",
+          "group": "navigation@100"
+        }
+      ],
       "editor/context": [
         {
           "when": "editorHasSelection",
@@ -392,17 +425,28 @@
         },
         "rustyRefactor.codetetherChatTransport": {
           "type": "string",
-          "default": "run",
+          "default": "websocket",
           "enum": [
+            "websocket",
             "run",
             "serve"
           ],
-          "description": "Chat transport. Use 'run' for codetether run -c."
+          "description": "Realtime transport for Codetether chat requests."
         },
         "rustyRefactor.codetetherA2AServerUrl": {
           "type": "string",
           "default": "",
-          "description": "Optional URL of a remote Codetether A2A server to use for model discovery and chat (e.g. http://localhost:8000). Useful when port-forwarding a cluster-hosted a2a-server."
+          "description": "Remote Codetether A2A URL for model discovery."
+        },
+        "rustyRefactor.codetetherVaultAddress": {
+          "type": "string",
+          "default": "https://vault.spotlessbinco.com",
+          "description": "Vault server used for Codetether provider secrets."
+        },
+        "rustyRefactor.codetetherVaultAppRole": {
+          "type": "string",
+          "default": "rusty-refactor-vscode",
+          "description": "Vault AppRole used for provider access."
         },
         "rustyRefactor.codetetherServer": {
           "type": "string",
@@ -418,6 +462,11 @@
           "type": "string",
           "default": "",
           "description": "Voice id for chat text-to-speech."
+        },
+        "rustyRefactor.ttsServerUrl": {
+          "type": "string",
+          "default": "http://192.168.50.101:8016",
+          "description": "Kokoro TTS server used by chat Read buttons."
         }
       }
     }
@@ -437,23 +486,30 @@
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
     "package": "vsce package",
-    "package:dev": "node scripts/package-dev.js",
+    "package:dev": "node scripts/package-all-dev.js",
     "publish": "vsce publish",
     "package-publish": "npm run package"
   },
   "devDependencies": {
-    "@types/node": "24.9.2",
+    "@rsbuild/core": "1.6.0",
+    "@types/jsdom": "27.0.0",
+    "@types/markdown-it": "14.2.0",
     "@types/mocha": "10.0.10",
+    "@types/node": "24.9.2",
     "@types/vscode": "1.105.0",
-    "@vscode/vsce": "3.6.2",
-    "@vscode/test-electron": "2.5.2",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "8.46.2",
     "@typescript-eslint/parser": "8.46.2",
-    "@rsbuild/core": "1.6.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "3.6.2",
     "eslint": "9.39.0",
     "glob": "11.0.3",
+    "jsdom": "29.1.1",
+    "markdown-it": "14.3.0",
     "mocha": "11.7.5",
     "typescript": "^5.0.4"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
 }

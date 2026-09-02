@@ -2,12 +2,17 @@ import * as http from 'http';
 import * as https from 'https';
 import * as vscode from 'vscode';
 
-export const CODE_TETHER_SERVER_SECRET_KEY =
-    'rustyRefactor.codeTether.serverUrl';
-export const CODE_TETHER_TOKEN_SECRET_KEY =
-    'rustyRefactor.codeTether.token';
+import {
+    CODE_TETHER_SERVER_SECRET_KEY,
+    CODE_TETHER_TOKEN_SECRET_KEY
+} from './codetetherManagedSession';
 
-const REQUEST_TIMEOUT_MS = 6000;
+export {
+    CODE_TETHER_SERVER_SECRET_KEY,
+    CODE_TETHER_TOKEN_SECRET_KEY
+} from './codetetherManagedSession';
+
+const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 let defaultSecretStorage: vscode.SecretStorage | undefined;
 
 /**
@@ -125,7 +130,7 @@ export class CodeTetherClient {
         const result = await this.get(
             `${session.serverUrl}/v1/models/vscode`,
             session.token,
-            REQUEST_TIMEOUT_MS
+            MODEL_DISCOVERY_TIMEOUT_MS
         );
         const parsed = this.parseModelsResponse(result.body);
         const models = parsed.data ?? [];

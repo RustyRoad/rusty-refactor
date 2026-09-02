@@ -14,6 +14,8 @@ rsbuild.config.ts
 # Development files
 .vscode/
 .vscode-test/
+.agents/
+audio-companion/
 .codetether-agent/
 .git/
 .gitignore

@@ -1,5 +1,8 @@
 import { ChatRunSettingsMarkup } from './chatRunSettingsMarkup';
 import { ChatSessionControlsMarkup } from './chatSessionControlsMarkup';
+import {
+    ChatSpeechControlsMarkup
+} from './chatSpeechControlsMarkup';
 import { ChatTopControlsMarkup } from './chatTopControlsMarkup';
 
 /**
@@ -11,6 +14,8 @@ export class ChatControlMarkup {
      */
     public constructor(
         private readonly topControls = new ChatTopControlsMarkup(),
+        private readonly speechControls =
+            new ChatSpeechControlsMarkup(),
         private readonly runSettings = new ChatRunSettingsMarkup(),
         private readonly sessions = new ChatSessionControlsMarkup()
     ) {}
@@ -22,6 +27,7 @@ export class ChatControlMarkup {
         return [
             '<div class="header">',
             this.topControls.markup(),
+            this.speechControls.markup(),
             this.runSettings.markup(),
             this.sessions.markup(),
             '</div>',
@@ -37,9 +43,15 @@ export class ChatControlMarkup {
             '<textarea id="prompt-input" rows="1"',
             ' aria-label="Chat prompt"',
             ' placeholder="Ask Codetether..."></textarea>',
-            '<button id="voice-btn" class="icon-button" title="Dictate prompt"',
+            '<button id="voice-btn" class="composer-button"',
+            ' title="Dictate prompt"',
             ' aria-label="Dictate prompt">',
-            '<span class="icon-glyph" aria-hidden="true">&#127908;</span>',
+            'Mic',
+            '</button>',
+            '<button id="interrupt-btn" class="composer-button"',
+            ' title="Interrupt active response"',
+            ' aria-label="Interrupt active response" disabled>',
+            '<span class="interrupt-icon" aria-hidden="true"></span>',
             '</button>',
             '<button id="send-btn" class="primary"',
             ' aria-label="Send prompt">Send</button>',

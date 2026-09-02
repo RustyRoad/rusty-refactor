@@ -17,10 +17,34 @@ import {
 import {
     configureCodeTetherSecretStorage
 } from './codeTetherApiClient';
-import { CodetetherCodeActionProvider, handleFixWithCodetether, handleFixAllWithCodetether } from './fixWithCodetether';
+import {
+    registerCodetetherVaultTokenCommand
+} from './codetetherVaultTokenCommand';
+import {
+    CodetetherCodeActionProvider,
+    handleFixAllWithCodetether,
+    handleFixWithCodetether
+} from './fixWithCodetether';
 import { registerChatParticipant } from './chatParticipant';
-import { CodetetherChatViewProvider } from './sidebar/CodetetherChatViewProvider';
+import {
+    CodetetherChatViewProvider
+} from './sidebar/CodetetherChatViewProvider';
+import { ChatPopoutCommand } from './sidebar/chatPopoutCommand';
+import { registerOpenChatCommand } from './sidebar/openChatCommand';
+import {
+    registerTodoCodeActionProvider
+} from './todoCodeActionProvider';
+import {
+    registerTodoCodeLensProvider
+} from './todoCodeLensProvider';
+import { registerTodoDiagnostics } from './todoDiagnosticManager';
+import {
+    registerTodoImplementationCommand
+} from './todoImplementationCommand';
 import { handleDocumentWithCodetether } from './documentWithCodetether';
+import {
+    WorkspaceFileChangeService
+} from './workspaceFileChangeService';
 
 import {
     enhancedCargoCheck,
@@ -35,7 +59,10 @@ import {
 let rustAnalyzerIntegration: RustAnalyzerIntegration;
 let outputChannel: vscode.OutputChannel;
 
-export function activate(context: vscode.ExtensionContext) {
+/**
+ * Activates extension services, commands, and workspace integrations.
+ */
+export function activate(context: vscode.ExtensionContext): void {
     try {
         // Create output channel for logging
         outputChannel = vscode.window.createOutputChannel('Rusty Refactor');
@@ -43,7 +70,15 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Make output channel globally accessible for logging from other classes
         (global as any).rustyRefactorOutputChannel = outputChannel;
-        configureCodetetherSecretStorage(context.secrets);
+        const vaultTokens = configureCodetetherSecretStorage(
+            context.secrets
+        );
+        const vaultTokenCommand = registerCodetetherVaultTokenCommand(
+            vaultTokens,
+            CodetetherClient.disposeAllServers
+        );
+        context.subscriptions.push(vaultTokens, vaultTokenCommand);
+        void vaultTokens.initialize();
         configureCodeTetherSecretStorage(context.secrets);
 
         outputChannel.appendLine('Rusty Refactor is now active!');
@@ -110,14 +145,30 @@ export function activate(context: vscode.ExtensionContext) {
         registerChatParticipant(context);
         outputChannel.appendLine('✓ Codetether Chat Participant registered');
 
+        const workspaceFiles = new WorkspaceFileChangeService();
+        context.subscriptions.push(workspaceFiles);
+
         // Register Codetether Sidebar View
-        const chatProvider = new CodetetherChatViewProvider(context);
+        const chatProvider = new CodetetherChatViewProvider(
+            context,
+            workspaceFiles
+        );
         context.subscriptions.push(
             vscode.window.registerWebviewViewProvider(
                 CodetetherChatViewProvider.viewType,
                 chatProvider,
                 { webviewOptions: { retainContextWhenHidden: true } }
             )
+        );
+        context.subscriptions.push(registerOpenChatCommand());
+        context.subscriptions.push(
+            new ChatPopoutCommand(context, workspaceFiles)
+        );
+        context.subscriptions.push(
+            registerTodoCodeActionProvider(),
+            registerTodoCodeLensProvider(),
+            registerTodoDiagnostics(),
+            registerTodoImplementationCommand(chatProvider)
         );
         outputChannel.appendLine('✓ Codetether Sidebar registered');
 
@@ -395,7 +446,13 @@ export function activate(context: vscode.ExtensionContext) {
         const fixWithCodetetherCommand = vscode.commands.registerCommand(
             'rustyRefactor.fixWithCodetether',
             async (uri: vscode.Uri, diagnostic: vscode.Diagnostic, range: vscode.Range) => {
-                await handleFixWithCodetether(uri, diagnostic, range, true);
+                await handleFixWithCodetether(
+                    uri,
+                    diagnostic,
+                    range,
+                    true,
+                    workspaceFiles
+                );
             }
         );
 
@@ -403,7 +460,13 @@ export function activate(context: vscode.ExtensionContext) {
         const fixAllWithCodetetherCommand = vscode.commands.registerCommand(
             'rustyRefactor.fixAllWithCodetether',
             async (uri: vscode.Uri, diagnostics: readonly vscode.Diagnostic[], range: vscode.Range) => {
-                await handleFixAllWithCodetether(uri, diagnostics, range, true);
+                await handleFixAllWithCodetether(
+                    uri,
+                    diagnostics,
+                    range,
+                    true,
+                    workspaceFiles
+                );
             }
         );
 
@@ -440,6 +503,10 @@ export function activate(context: vscode.ExtensionContext) {
                     { label: '$(terminal) Open Codetether TUI', value: 'tui' },
                     { label: '$(fileExecutable) Set Binary Path', value: 'path' },
                     { label: '$(symbol-symbol) Set Model Name', value: 'model' },
+                    {
+                        label: '$(key) Bootstrap Vault Access',
+                        value: 'vaultToken'
+                    },
                     { label: '$(broadcast) Set Chat Transport', value: 'transport' },
                     { label: '$(settings-gear) Test Codetether', value: 'test' }
                 ];
@@ -509,26 +576,54 @@ export function activate(context: vscode.ExtensionContext) {
                         break;
                     }
 
+                    case 'vaultToken': {
+                        await vscode.commands.executeCommand(
+                            'rustyRefactor.configureCodetetherVaultToken'
+                        );
+                        break;
+                    }
+
                     case 'transport': {
-                        const currentTransport = config.get<string>('codetetherChatTransport') || 'run';
-                        const selectedTransport = await vscode.window.showQuickPick(
+                        const currentTransport = config.get<string>(
+                            'codetetherChatTransport'
+                        ) || 'websocket';
+                        const selectedTransport = await vscode.window
+                            .showQuickPick(
                             [
                                 {
+                                    label: 'Codetether WebSocket',
+                                    description: 'Stream each chat session '
+                                        + 'over its own realtime socket',
+                                    value: 'websocket'
+                                },
+                                {
                                     label: 'codetether run',
-                                    description: 'Run one CLI process per chat request',
+                                    description: 'Run one CLI process per '
+                                        + 'chat request',
                                     value: 'run'
                                 },
                                 {
-                                    label: 'codetether serve + A2A',
-                                    description: 'Keep a workspace server running and message /a2a',
+                                    label: 'codetether serve',
+                                    description: 'Keep a workspace server '
+                                        + 'running for model chat',
                                     value: 'serve'
                                 }
                             ],
-                            { placeHolder: `Chat transport (current: ${currentTransport})` }
+                            {
+                                placeHolder: 'Chat transport '
+                                    + `(current: ${currentTransport})`
+                            }
                         );
                         if (selectedTransport) {
-                            await config.update('codetetherChatTransport', selectedTransport.value, vscode.ConfigurationTarget.Global);
-                            vscode.window.showInformationMessage(`Codetether chat transport set to: ${selectedTransport.label}`);
+                            await config.update(
+                                'codetetherChatTransport',
+                                selectedTransport.value,
+                                vscode.ConfigurationTarget.Global
+                            );
+                            vscode.window.showInformationMessage(
+                                'Codetether chat transport set to: '
+                                + selectedTransport.label
+                            );
                         }
                         break;
                     }
@@ -599,9 +694,13 @@ export function activate(context: vscode.ExtensionContext) {
     }
 }
 
+/**
+ * Opens a Codetether TUI terminal for the active workspace.
+ */
 function openCodetetherTui(): void {
     const config = vscode.workspace.getConfiguration('rustyRefactor');
-    const binaryPath = config.get<string>('codetetherBinaryPath') || 'codetether';
+    const binaryPath = config.get<string>('codetetherBinaryPath')
+        || 'codetether';
     const model = config.get<string>('codetetherModel') || '';
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     const cwd = workspaceFolder?.uri.fsPath;
@@ -611,11 +710,24 @@ function openCodetetherTui(): void {
         cwd
     });
 
-    const quotedBinary = quoteShellArg(binaryPath);
-    const modelArgs = model ? ` --model ${quoteShellArg(model)}` : '';
     terminal.show(true);
-    terminal.sendText(`${quotedBinary} tui${modelArgs}`);
-    logToOutput(`[Codetether] Opened TUI terminal${cwd ? ` in ${cwd}` : ''}${model ? ` with model ${model}` : ''}`);
+    terminal.sendText(codetetherTuiCommand(binaryPath, model));
+    logToOutput(
+        '[Codetether] Opened TUI terminal'
+        + (cwd ? ` in ${cwd}` : '')
+        + (model ? ` with model ${model}` : '')
+    );
+}
+
+/**
+ * Builds the shell command used to start Codetether's interactive TUI.
+ *
+ * The model flag is passed only when a default model is configured.
+ */
+function codetetherTuiCommand(binaryPath: string, model: string): string {
+    const selected = model.trim();
+    const modelArg = selected ? ` --model ${quoteShellArg(selected)}` : '';
+    return `${quoteShellArg(binaryPath)} tui${modelArg}`;
 }
 
 function quoteShellArg(value: string): string {

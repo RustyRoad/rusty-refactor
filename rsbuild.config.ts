@@ -46,6 +46,8 @@ export default defineConfig({
         rspack: {
           externals: {
             vscode: 'commonjs vscode',
+            bufferutil: 'commonjs bufferutil',
+            'utf-8-validate': 'commonjs utf-8-validate',
           },
           externalsType: 'commonjs',
           output: {
@@ -62,6 +64,8 @@ export default defineConfig({
     webview: {
       source: {
         entry: {
+          'chat-sidebar-markdown':
+            './webview-src/codetether-chat/markdown.ts',
           'module-extractor': './webview-src/module-extractor/index.ts',
         },
       },

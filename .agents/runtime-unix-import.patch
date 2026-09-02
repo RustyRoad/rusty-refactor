@@ -1,0 +1,10 @@
+diff --git a/src/tool/process_tree/unix.rs b/src/tool/process_tree/unix.rs
+--- a/src/tool/process_tree/unix.rs
++++ b/src/tool/process_tree/unix.rs
+@@ -1,6 +1,5 @@
+ //! Unix process-group ownership for cancellable tool processes.
+ 
+ use std::io;
+-use std::os::unix::process::CommandExt;
+ 
+ use tokio::process::Command;

@@ -1,24 +1,20 @@
 /**
  * Replaces visible chat messages with a loaded session transcript.
  *
+ * @param {string} threadId - Live thread receiving the saved transcript.
  * @param {string} sessionId - Session id loaded by the extension host.
  * @param {object[]} messages - Transcript messages to render.
  * @returns {void}
  */
-function renderLoadedSession(sessionId, messages) {
+function renderLoadedSession(threadId, sessionId, messages) {
     stopSpeech();
-    dispatchChatState('clearMessages');
-    chatContainer.innerHTML = '';
     const transcript = Array.isArray(messages) ? messages : [];
-    transcript.forEach(message => {
-        appendMessage(
-            message.role,
-            message.content || '',
-            false,
-            undefined,
-            sessionId,
-        );
+    dispatchChatState('replaceThreadMessages', {
+        threadId,
+        sessionId,
+        messages: transcript,
     });
+    renderActiveThreadTranscript('Session has no visible messages.');
     renderEmptyLoadedSession(transcript);
 }
 
@@ -44,7 +40,8 @@ function renderEmptyLoadedSession(transcript) {
  * @returns {void}
  */
 function handleSessionLoadedMessage(message) {
+    const threadId = message.threadId || '';
     const sessionId = message.sessionId || '';
-    renderLoadedSession(sessionId, message.messages || []);
+    renderLoadedSession(threadId, sessionId, message.messages || []);
     setBusy(false, 'Loaded session ' + shortToolId(sessionId));
 }

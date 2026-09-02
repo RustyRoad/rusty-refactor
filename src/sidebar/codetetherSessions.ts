@@ -1,6 +1,8 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
+import { CodetetherAgentSessionIndex } from
+    './codetetherAgentSessionIndex';
 import { CodetetherSessionDirectory } from './codetetherSessionDirectory';
 import { CodetetherSessionHistoryRoot } from './codetetherSessionHistoryRoot';
 import { CodetetherSessionPreview } from './codetetherSessionPreview';
@@ -18,14 +20,38 @@ export class CodetetherSessionService {
     public constructor(
         private readonly root = new CodetetherSessionHistoryRoot(),
         private readonly directory = new CodetetherSessionDirectory(),
-        private readonly preview = new CodetetherSessionPreview()
+        private readonly preview = new CodetetherSessionPreview(),
+        private readonly agentSessions = new CodetetherAgentSessionIndex()
     ) {}
 
     /**
-     * Lists recent Codetether sessions stored under the workspace history.
+     * Lists recent sessions across JSON agent state and Markdown history.
      */
     public async listRecentSessions(
         limit = 20
+    ): Promise<CodetetherSessionSummary[]> {
+        const [historySessions, agentSessions] = await Promise.all([
+            this.listHistorySessions(limit),
+            this.agentSessions.list(limit)
+        ]);
+        const sessionsById = new Map<string, CodetetherSessionSummary>();
+        for (const session of [...historySessions, ...agentSessions]) {
+            const existing = sessionsById.get(session.id);
+            if (!existing || session.updatedAt > existing.updatedAt) {
+                sessionsById.set(session.id, session);
+            }
+        }
+
+        return [...sessionsById.values()]
+            .sort((left, right) => right.updatedAt - left.updatedAt)
+            .slice(0, limit);
+    }
+
+    /**
+     * Lists sessions persisted in the older Markdown turn format.
+     */
+    private async listHistorySessions(
+        limit: number
     ): Promise<CodetetherSessionSummary[]> {
         const historyRoot = this.root.path();
         if (!historyRoot) {
@@ -84,7 +110,8 @@ export class CodetetherSessionService {
             preview: await this.preview.fromFirstUserTurn(
                 sessionPath,
                 turnFiles
-            )
+            ),
+            format: 'history'
         };
     }
 

@@ -1,23 +1,30 @@
 import * as vscode from 'vscode';
 
-import { ChatMessage, CodetetherClient } from '../codetetherClient';
+import { CodetetherClient } from '../codetetherClient';
+import {
+    CodetetherModelOptions,
+    normalizeCodetetherModelOptions
+} from '../codetetherModelOptions';
 import {
     CodetetherSubagentActivity,
-    coordinatorSubagentActivity,
-    finishSubagentActivity,
-    mergeSubagentActivity,
-    subagentActivityFromToolEvents,
     subagentSummary
 } from '../codetetherSubagentActivity';
-import { CodetetherToolEvent } from '../codetetherToolEvents';
 import { logToOutput } from '../extractor';
-import { AgentPromptBuilder } from './agentPromptBuilder';
-import { CHAT_SYSTEM_PROMPT } from './chatConstants';
-import { CodetetherSessionOpenService } from './codetetherSessionOpenService';
+import type { ChatRunSnapshot } from './chatRunController';
 import {
-    ChatSpeechService,
-    ChatSpeechVoice
+    ChatSpeechService
 } from './chatSpeechService';
+import type {
+    ChatSpeechAudioCommand,
+    ChatSpeechVoice
+} from './chatSpeechTypes';
+import {
+    CodetetherSessionOpenResult,
+    CodetetherSessionOpenService
+} from './codetetherSessionOpenService';
+import {
+    CodetetherModelOptionsService
+} from './codetetherModelOptionsService';
 import { ChatWebviewHtml } from './chatWebviewHtml';
 import { ChatWorkerLocator } from './chatWorkerLocator';
 import { ChatVoiceInputService } from './chatVoiceInputService';
@@ -25,20 +32,30 @@ import {
     ChatVoiceInputResult,
     ChatVoiceInputState
 } from './chatVoiceInputTypes';
-import {
-    normalizeFeature,
-    normalizeMode,
-    statusForMode
-} from './chatModes';
 import { CodetetherSessionService } from './codetetherSessions';
-import {
-    ChatHistory,
-    ChatMode,
-    CodetetherFeature,
+import type {
     UserMessageRequest
 } from './chatTypes';
+import { ChatThreadFileTracker } from './chatThreadFileTracker';
+import {
+    ChatThreadManager,
+    ChatThreadSink,
+    ChatThreadSummary
+} from './chatThreadManager';
+import {
+    ChatThreadSubagentTracker
+} from './chatThreadSubagentTracker';
 import { ModelListService } from './modelListService';
-import { SubagentSessionMonitor } from './subagentSessionMonitor';
+import {
+    WorkspaceFileChangeObserver
+} from '../workspaceFileChangeService';
+import {
+    WorkspaceFileOpenService
+} from './workspaceFileOpenService';
+import {
+    ChatPopoutRequest,
+    OPEN_CHAT_WINDOW_COMMAND
+} from './chatPopoutConstants';
 
 /**
  * Hosts the Codetether chat sidebar and coordinates VS Code webview events.
@@ -47,38 +64,60 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'rustyRefactor.chatView';
     private static readonly ttsVoiceStateKey = 'codetether.ttsVoiceId';
 
-    private view?: vscode.WebviewView;
+    private webview?: vscode.Webview;
+    private pendingSession?: ChatPopoutRequest;
     private readonly client: CodetetherClient;
     private readonly modelListService: ModelListService;
     private readonly sessionService: CodetetherSessionService;
     private readonly sessionOpenService: CodetetherSessionOpenService;
-    private readonly promptBuilder: AgentPromptBuilder;
+    private readonly workspaceFileOpener: WorkspaceFileOpenService;
+    private readonly modelOptions: CodetetherModelOptionsService;
+    private readonly chatThreads: ChatThreadManager;
+    private readonly threadFiles: ChatThreadFileTracker;
+    private readonly threadSubagents: ChatThreadSubagentTracker;
     private readonly htmlRenderer: ChatWebviewHtml;
     private readonly speechService: ChatSpeechService;
     private readonly voiceInputService: ChatVoiceInputService;
-    private chatHistory: ChatHistory = [];
-    private autoSpeakNextResponse = false;
-    private subagentActivities: CodetetherSubagentActivity[] = [];
-    private subagentMonitor?: SubagentSessionMonitor;
 
     /**
-     * Creates sidebar collaborators and binds persisted extension state.
+     * Creates chat collaborators and binds optional initial session state.
      */
     public constructor(
-        private readonly context: vscode.ExtensionContext
+        private readonly context: vscode.ExtensionContext,
+        workspaceFiles: WorkspaceFileChangeObserver,
+        initialSession?: ChatPopoutRequest
     ) {
+        this.pendingSession = initialSession;
         this.client = new CodetetherClient({
             secretStorage: this.context.secrets
         });
         this.modelListService = new ModelListService(this.client);
         this.sessionService = new CodetetherSessionService();
         this.sessionOpenService = new CodetetherSessionOpenService();
-        this.promptBuilder = new AgentPromptBuilder();
+        this.workspaceFileOpener = new WorkspaceFileOpenService();
+        this.modelOptions = new CodetetherModelOptionsService(
+            this.context.globalState
+        );
+        this.threadFiles = new ChatThreadFileTracker(workspaceFiles);
+        this.threadSubagents = new ChatThreadSubagentTracker(
+            () => this.workspacePathForSubagentMonitor(),
+            activities => this.postSubagentActivities(activities)
+        );
+        this.chatThreads = new ChatThreadManager(
+            this.client,
+            this.createChatThreadSink()
+        );
         this.htmlRenderer = new ChatWebviewHtml();
         this.speechService = new ChatSpeechService(
             this.context.extensionUri.fsPath,
             state => {
                 this.postSpeechState(state);
+            },
+            command => {
+                this.postSpeechAudio(command);
+            },
+            () => {
+                return this.ttsServerUrl();
             }
         );
         const workerLocator = new ChatWorkerLocator(
@@ -93,30 +132,84 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
                 this.postVoiceInputResult(result);
             }
         );
-        this.resetChatHistory();
     }
 
     /**
      * Initializes the chat webview, listeners, and first HTML render.
      */
     public resolveWebviewView(webviewView: vscode.WebviewView): void {
-        this.view = webviewView;
-        webviewView.webview.options = this.webviewOptions();
+        this.resolveWebview(
+            webviewView.webview,
+            listener => webviewView.onDidDispose(listener)
+        );
+    }
+
+    /**
+     * Initializes one detached chat panel with the shared surface contract.
+     */
+    public resolveWebviewPanel(panel: vscode.WebviewPanel): void {
+        this.resolveWebview(
+            panel.webview,
+            listener => panel.onDidDispose(listener)
+        );
+    }
+
+    /**
+     * Binds one webview to this provider and releases its surface resources.
+     */
+    private resolveWebview(
+        webview: vscode.Webview,
+        onDidDispose: (
+            listener: () => unknown
+        ) => vscode.Disposable
+    ): void {
+        this.webview = webview;
+        webview.options = this.webviewOptions();
 
         const configListener = this.registerConfigListener();
-        webviewView.onDidDispose(() => {
+        onDidDispose(() => {
             configListener.dispose();
-            this.stopSubagentMonitor();
+            this.chatThreads.dispose();
+            this.threadSubagents.dispose();
             this.speechService.stop();
-            this.voiceInputService.stop();
+            void this.voiceInputService.stop();
+            this.webview = undefined;
         });
-        webviewView.webview.onDidReceiveMessage(data => {
+        webview.onDidReceiveMessage(data => {
             void this.handleWebviewMessage(data);
         });
-        webviewView.webview.html = this.htmlRenderer.render(
-            webviewView.webview,
+        webview.html = this.htmlRenderer.render(
+            webview,
             this.context.extensionUri,
         );
+    }
+
+    /**
+     * Starts one editor-originated code task in a visible agent session.
+     */
+    public async startCodeSession(prompt: string): Promise<void> {
+        if (!this.webview) {
+            throw new Error('The Codetether sidebar is not ready.');
+        }
+
+        const thread = this.chatThreads.createThread();
+        const delivered = await this.webview.postMessage({
+            type: 'receiveMessage',
+            role: 'user',
+            content: prompt,
+            threadId: thread.id
+        });
+        if (!delivered) {
+            throw new Error('The Codetether sidebar did not accept the task.');
+        }
+
+        await this.chatThreads.submit(thread.id, {
+            text: prompt,
+            modelOptions: this.modelOptions.current(),
+            mode: 'agent',
+            feature: 'code',
+            includeContext: true
+        });
     }
 
     /**
@@ -130,10 +223,17 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Refreshes model configuration when the user changes extension settings.
+     * Refreshes sidebar services when their extension settings change.
      */
     private registerConfigListener(): vscode.Disposable {
         return vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration(
+                'rustyRefactor.ttsServerUrl'
+            )) {
+                this.speechService.stop();
+                void this.sendVoiceFeatureState();
+            }
+
             const affectsModelDiscovery = [
                 'rustyRefactor.codetetherModel',
                 'rustyRefactor.codetetherChatTransport',
@@ -172,7 +272,10 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     private async dispatchWebviewMessage(data: any): Promise<void> {
         switch (data?.type) {
             case 'webviewReady':
-                await this.sendSpeechSupport();
+                this.sendChatThreads();
+                await this.openPendingSession();
+                await this.sendVoiceFeatureState();
+                this.sendModelOptions();
                 await this.sendModelsList();
                 await this.sendSessionsList();
                 return;
@@ -182,8 +285,23 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
             case 'setModel':
                 await this.setDefaultModel(data.value?.model || '');
                 return;
+            case 'setModelOptions':
+                await this.setModelOptions(data.value?.options);
+                return;
             case 'sendMessage':
-                await this.handleUserMessage(this.toUserMessageRequest(data));
+                await this.handleUserMessage(
+                    data.value?.threadId || '',
+                    this.toUserMessageRequest(data)
+                );
+                return;
+            case 'interruptChat':
+                this.interruptChat(data.value?.threadId || '');
+                return;
+            case 'newChat':
+                this.chatThreads.createThread();
+                return;
+            case 'selectChatThread':
+                this.chatThreads.selectThread(data.value?.threadId || '');
                 return;
             case 'refreshSessions':
                 await this.sendSessionsList();
@@ -205,6 +323,18 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
                     'rustyRefactor.openCodetetherTui'
                 );
                 return;
+            case 'openChatWindow':
+                await vscode.commands.executeCommand(
+                    OPEN_CHAT_WINDOW_COMMAND,
+                    {
+                        sessionId: data.value?.id || '',
+                        sessionPath: data.value?.path || ''
+                    } satisfies ChatPopoutRequest
+                );
+                return;
+            case 'openWorkspaceFile':
+                await this.workspaceFileOpener.open(data.value);
+                return;
             case 'log':
                 logToOutput(
                     `[Codetether Chat WebView] ${data.message || ''}`
@@ -214,23 +344,43 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
                 this.handleUiTelemetry(data.value);
                 return;
             case 'clearChat':
-                this.clearChat();
+                this.clearChat(data.value?.threadId || '');
                 return;
             case 'speakText':
-                this.speakText(
+                await this.speakText(
                     data.value?.messageId,
                     data.value?.text,
                     data.value?.voiceId
                 );
                 return;
+            case 'appendSpeechStream':
+                this.appendSpeechStream(
+                    data.value?.messageId,
+                    data.value?.text,
+                    data.value?.voiceId
+                );
+                return;
+            case 'finishSpeechStream':
+                this.speechService.finishStream(
+                    typeof data.value?.messageId === 'string'
+                        ? data.value.messageId
+                        : ''
+                );
+                return;
             case 'stopSpeech':
                 this.speechService.stop();
                 return;
+            case 'speechAudioEnded':
+                this.speechService.completeWebviewPlayback(
+                    data.value?.messageId,
+                    data.value?.error
+                );
+                return;
             case 'startVoiceInput':
-                this.voiceInputService.start();
+                await this.voiceInputService.start();
                 return;
             case 'stopVoiceInput':
-                this.voiceInputService.stop();
+                await this.voiceInputService.stop();
                 return;
             case 'setVoiceInputSource':
                 this.voiceInputService.setInput(
@@ -283,7 +433,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
                 return text;
             }
 
-            return `${text.slice(0, maxLen)}…`;
+            return `${text.slice(0, maxLen)}...`;
         } catch {
             return '{"error":"unserializable telemetry detail"}';
         }
@@ -296,6 +446,9 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
         return {
             text: data.value?.text || '',
             model: data.value?.model,
+            modelOptions: normalizeCodetetherModelOptions(
+                data.value?.modelOptions || this.modelOptions.current()
+            ),
             mode: data.value?.mode,
             feature: data.value?.feature,
             includeContext: Boolean(data.value?.includeContext),
@@ -312,38 +465,60 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
         logToOutput(
             `[Codetether Chat] Failed to handle webview message: ${message}`
         );
-        this.postAssistantError(message);
+        this.postSidebarError(message);
         this.postStatus('Ready', false);
-    }
-
-    /**
-     * Restores the chat history to the system prompt only.
-     */
-    private resetChatHistory(): void {
-        this.chatHistory = [{ role: 'system', content: CHAT_SYSTEM_PROMPT }];
     }
 
     /**
      * Clears chat state and notifies the webview to reset visible messages.
      */
-    private clearChat(): void {
+    private clearChat(threadId: string): void {
         this.speechService.stop();
-        this.voiceInputService.stop();
-        this.stopSubagentMonitor();
-        this.postSubagentActivities([]);
-        this.resetChatHistory();
-        this.view?.webview.postMessage({ type: 'cleared' });
+        void this.voiceInputService.stop();
+        const clearedThreadId = threadId
+            || this.chatThreads.activeThreadId();
+        if (!this.chatThreads.clearThread(clearedThreadId)) {
+            return;
+        }
+
+        this.webview?.postMessage({
+            type: 'threadCleared',
+            threadId: clearedThreadId
+        });
+    }
+
+    /**
+     * Hard-stops one selected response without clearing its conversation.
+     */
+    private interruptChat(threadId: string): void {
+        const targetThreadId = threadId
+            || this.chatThreads.activeThreadId();
+        if (!this.chatThreads.interruptThread(targetThreadId)) {
+            return;
+        }
+        if (this.chatThreads.isActive(targetThreadId)) {
+            this.speechService.stop();
+        }
+    }
+
+    /**
+     * Sends host-owned speech and microphone state to the webview.
+     */
+    private async sendVoiceFeatureState(): Promise<void> {
+        this.speechService.emitSupportStatus();
+        await this.voiceInputService.emitSupportStatus();
+        await this.sendSpeechVoices();
     }
 
     /**
      * Starts host-side text to speech for one assistant response.
      */
-    private speakText(
+    private async speakText(
         messageId: unknown,
         text: unknown,
         voiceId: unknown
-    ): void {
-        this.speechService.speak(
+    ): Promise<void> {
+        await this.speechService.speak(
             typeof messageId === 'string' ? messageId : '',
             typeof text === 'string' ? text : '',
             this.toVoiceId(voiceId)
@@ -351,12 +526,18 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Sends current host speech support to the webview.
+     * Queues one streamed Markdown fragment for ordered speech playback.
      */
-    private async sendSpeechSupport(): Promise<void> {
-        this.speechService.emitSupportStatus();
-        this.voiceInputService.emitSupportStatus();
-        await this.sendSpeechVoices();
+    private appendSpeechStream(
+        messageId: unknown,
+        text: unknown,
+        voiceId: unknown
+    ): void {
+        this.speechService.appendStream(
+            typeof messageId === 'string' ? messageId : '',
+            typeof text === 'string' ? text : '',
+            this.toVoiceId(voiceId)
+        );
     }
 
     /**
@@ -364,7 +545,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      */
     private async sendSpeechVoices(): Promise<void> {
         const voices = await this.speechService.listVoices();
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'speechVoicesListed',
             voices,
             selectedVoiceId: this.configuredTtsVoiceId(voices)
@@ -386,7 +567,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      * Returns a valid voice id from input or persisted extension state.
      */
     private toVoiceId(value: unknown): string {
-        if (typeof value === 'string' && value.trim()) {
+        if (typeof value === 'string') {
             return value.trim();
         }
 
@@ -401,6 +582,16 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
             CodetetherChatViewProvider.ttsVoiceStateKey,
             ''
         );
+    }
+
+    /**
+     * Reads the configured TTS base URL used for speech synthesis.
+     */
+    private ttsServerUrl(): string {
+        return vscode.workspace
+            .getConfiguration('rustyRefactor')
+            .get<string>('ttsServerUrl', '')
+            .trim();
     }
 
     /**
@@ -426,9 +617,38 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
         supported: boolean;
         error?: string;
     }): void {
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'speechState',
             ...state
+        });
+    }
+
+    /**
+     * Posts portable WAV audio for playback on the local webview client.
+     */
+    private postSpeechAudio(command: ChatSpeechAudioCommand): void {
+        const audioBytes = command.action === 'play'
+            ? Buffer.byteLength(command.audioBase64, 'base64')
+            : 0;
+        logToOutput(
+            '[Codetether Chat] TTS webview transfer '
+            + `action=${command.action} bytes=${audioBytes}`
+        );
+        const delivery = this.webview?.postMessage({
+            type: 'speechAudio',
+            ...command
+        });
+        if (!delivery) {
+            logToOutput(
+                '[Codetether Chat] TTS webview transfer has no active view'
+            );
+            return;
+        }
+        void delivery.then(delivered => {
+            logToOutput(
+                '[Codetether Chat] TTS webview transfer '
+                + `delivered=${String(delivered)}`
+            );
         });
     }
 
@@ -436,7 +656,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      * Posts microphone recognition state to the webview.
      */
     private postVoiceInputState(state: ChatVoiceInputState): void {
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'voiceInputState',
             ...state
         });
@@ -446,7 +666,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      * Posts recognized microphone text to the webview.
      */
     private postVoiceInputResult(result: ChatVoiceInputResult): void {
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'voiceInputResult',
             ...result
         });
@@ -456,7 +676,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      * Sends current model choices to the webview through the model service.
      */
     private async sendModelsList(): Promise<void> {
-        await this.modelListService.sendModelsList(this.view);
+        await this.modelListService.sendModelsList(this.webview);
     }
 
     /**
@@ -465,10 +685,32 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     private async sendSessionsList(): Promise<void> {
         const sessions = await this.sessionService.listRecentSessions();
 
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'sessionsListed',
             sessions
         });
+    }
+
+    /**
+     * Loads the persisted session requested when this chat surface was made.
+     */
+    private async openPendingSession(): Promise<void> {
+        const session = this.pendingSession;
+        this.pendingSession = undefined;
+        if (!session) {
+            return;
+        }
+
+        if (session.sessionPath) {
+            await this.openSession(
+                session.sessionPath,
+                session.sessionId || ''
+            );
+            return;
+        }
+        if (session.sessionId) {
+            await this.openSessionById(session.sessionId);
+        }
     }
 
     /**
@@ -480,8 +722,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     ): Promise<void> {
         const result = await this.sessionOpenService.openSelected(
             sessionPath,
-            sessionId,
-            this.view
+            sessionId
         );
         this.applySessionOpenResult(result);
     }
@@ -491,8 +732,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      */
     private async openSessionById(sessionId: string): Promise<void> {
         const result = await this.sessionOpenService.openById(
-            sessionId,
-            this.view
+            sessionId
         );
         this.applySessionOpenResult(result);
     }
@@ -500,12 +740,21 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     /**
      * Applies a session-load result to provider history and status text.
      */
-    private applySessionOpenResult(result: {
-        history?: ChatHistory;
-        status: string;
-    }): void {
-        if (result.history) {
-            this.chatHistory = result.history;
+    private applySessionOpenResult(
+        result: CodetetherSessionOpenResult
+    ): void {
+        if (result.history && result.messages && result.sessionId) {
+            const thread = this.chatThreads.openThread(
+                result.title || 'Previous chat',
+                result.history,
+                result.sessionId
+            );
+            this.webview?.postMessage({
+                type: 'sessionLoaded',
+                threadId: thread.id,
+                sessionId: result.sessionId,
+                messages: result.messages
+            });
         }
         this.postStatus(result.status, false);
     }
@@ -515,7 +764,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      */
     private async setDefaultModel(model: string): Promise<void> {
         await this.modelListService.setDefaultModel(model);
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'toast',
             message: model
                 ? `Default model saved: ${model}`
@@ -525,154 +774,42 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Sends a user message to Codetether and relays the assistant response.
+     * Persists validated provider options and returns the canonical snapshot.
+     */
+    private async setModelOptions(value: unknown): Promise<void> {
+        const options = await this.modelOptions.update(value);
+        this.postModelOptions(options);
+    }
+
+    /**
+     * Sends persisted provider options when the webview becomes ready.
+     */
+    private sendModelOptions(): void {
+        this.postModelOptions(this.modelOptions.current());
+    }
+
+    /**
+     * Posts one validated provider-option snapshot to the webview.
+     */
+    private postModelOptions(options: CodetetherModelOptions): void {
+        this.webview?.postMessage({
+            type: 'modelOptionsChanged',
+            options
+        });
+    }
+
+    /**
+     * Starts a chat request or steers the currently active protocol run.
      */
     private async handleUserMessage(
+        threadId: string,
         request: UserMessageRequest
     ): Promise<void> {
-        if (!this.view) {
+        if (!this.webview) {
             return;
         }
 
-        const trimmed = request.text.trim();
-        if (!trimmed) {
-            return;
-        }
-
-        const mode = normalizeMode(request.mode);
-        const feature = normalizeFeature(request.feature);
-        const prompt = await this.promptBuilder.buildAgentPrompt(
-            trimmed,
-            mode,
-            feature,
-            request.includeContext
-        );
-
-        this.chatHistory.push({ role: 'user', content: prompt });
-        this.autoSpeakNextResponse = Boolean(request.autoSpeak);
-        this.postStatus(statusForMode(mode), true);
-        this.startSubagentView(mode, feature);
-
-        await this.sendChatCompletion(request.model);
-    }
-
-    /**
-     * Calls the client for a completion and records the assistant message.
-     */
-    private async sendChatCompletion(modelOverride?: string): Promise<void> {
-        const autoSpeak = this.autoSpeakNextResponse;
-        this.autoSpeakNextResponse = false;
-
-        try {
-            const response = await this.client.chatCompletion(
-                this.chatHistory,
-                { model: modelOverride || undefined }
-            );
-            const assistantMessage = this.toAssistantMessage(response);
-            this.chatHistory.push(assistantMessage);
-            const toolEvents = this.responseToolEvents(response);
-
-            this.postAssistantMessage(
-                response.text || '*(No response text returned.)*',
-                toolEvents,
-                response.session_id,
-                autoSpeak
-            );
-            this.finishSubagentView(true, toolEvents);
-        } catch (error) {
-            this.finishSubagentView(false);
-            this.postAssistantError(this.chatErrorMessage(error));
-        } finally {
-            this.postStatus('Ready', false);
-        }
-    }
-
-    /**
-     * Converts a client response to the stored chat message format.
-     */
-    private toAssistantMessage(response: {
-        text?: string;
-        tool_calls?: ChatMessage['tool_calls'];
-    }): ChatMessage {
-        const assistantMessage: ChatMessage = { role: 'assistant' };
-
-        if (response.text) {
-            assistantMessage.content = response.text;
-        }
-        if (response.tool_calls) {
-            assistantMessage.tool_calls = response.tool_calls;
-        }
-
-        return assistantMessage;
-    }
-
-    /**
-     * Converts response tool metadata into the webview timeline shape.
-     */
-    private responseToolEvents(response: {
-        tool_events?: CodetetherToolEvent[];
-        tool_calls?: ChatMessage['tool_calls'];
-    }): CodetetherToolEvent[] {
-        if (response.tool_events && response.tool_events.length > 0) {
-            return response.tool_events;
-        }
-
-        return (response.tool_calls ?? []).map(toolCall => ({
-            kind: 'call',
-            id: toolCall.id,
-            name: toolCall.name,
-            arguments: toolCall.arguments
-        }));
-    }
-
-    /**
-     * Starts the visible sub-agent panel for modes that may delegate work.
-     */
-    private startSubagentView(
-        mode: ChatMode,
-        feature: CodetetherFeature
-    ): void {
-        this.stopSubagentMonitor();
-
-        if (!this.shouldShowSubagentView(mode, feature)) {
-            this.subagentActivities = [];
-            this.postSubagentActivities([]);
-            return;
-        }
-
-        this.subagentActivities = [coordinatorSubagentActivity()];
-        this.postSubagentActivities(this.subagentActivities);
-        this.startSubagentMonitor();
-    }
-
-    /**
-     * Returns whether the current request should expose coordination state.
-     */
-    private shouldShowSubagentView(
-        mode: ChatMode,
-        feature: CodetetherFeature
-    ): boolean {
-        return mode === 'orchestrate'
-            || feature === 'swarm'
-            || feature === 'prd';
-    }
-
-    /**
-     * Starts polling Codetether sessions for spawned sub-agent sessions.
-     */
-    private startSubagentMonitor(): void {
-        const workspacePath = this.workspacePathForSubagentMonitor();
-        if (!workspacePath) {
-            return;
-        }
-
-        this.subagentMonitor = new SubagentSessionMonitor(
-            workspacePath,
-            activities => {
-                this.mergeAndPostSubagentActivities(activities);
-            }
-        );
-        this.subagentMonitor.start();
+        await this.chatThreads.submit(threadId, request);
     }
 
     /**
@@ -690,65 +827,93 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Merges new activity rows into the current panel state.
-     */
-    private mergeAndPostSubagentActivities(
-        activities: CodetetherSubagentActivity[]
-    ): void {
-        this.subagentActivities = mergeSubagentActivity(
-            this.subagentActivities,
-            activities
-        );
-        this.postSubagentActivities(this.subagentActivities);
-    }
-
-    /**
      * Refreshes the sub-agent panel from local Codetether activity files.
      */
     private async refreshSubagentActivities(): Promise<void> {
-        const workspacePath = this.workspacePathForSubagentMonitor();
-        if (!workspacePath) {
+        const threadId = this.chatThreads.activeThreadId();
+        if (!await this.threadSubagents.refresh(threadId)) {
             this.postStatus('Open a workspace to refresh sub-agents.', false);
             return;
         }
 
-        const monitor = this.subagentMonitor
-            || new SubagentSessionMonitor(workspacePath, () => {});
-        const activities = await monitor.snapshot();
-        this.mergeAndPostSubagentActivities(activities);
         this.postStatus('Sub-agent activity refreshed.', false);
     }
 
     /**
-     * Finalizes activity rows once the Codetether request finishes.
+     * Connects independent run controllers to thread-scoped side effects.
      */
-    private finishSubagentView(
-        succeeded: boolean,
-        toolEvents: CodetetherToolEvent[] = []
-    ): void {
-        this.stopSubagentMonitor();
-        const toolActivities = subagentActivityFromToolEvents(toolEvents);
-
-        if (this.subagentActivities.length === 0
-                && toolActivities.length === 0) {
-            this.postSubagentActivities([]);
-            return;
-        }
-
-        const merged = mergeSubagentActivity(
-            this.subagentActivities,
-            toolActivities
-        );
-        this.subagentActivities = finishSubagentActivity(merged, succeeded);
-        this.postSubagentActivities(this.subagentActivities);
+    private createChatThreadSink(): ChatThreadSink {
+        return {
+            progress: (threadId, snapshot) => {
+                this.postChatProgress(threadId, snapshot);
+            },
+            tool: (threadId, event) => {
+                this.threadFiles.observe(threadId, event);
+            },
+            status: (threadId, message, busy) => {
+                if (this.chatThreads?.isActive(threadId)) {
+                    this.postStatus(message, busy);
+                }
+            },
+            start: (threadId, mode, feature) => {
+                this.threadFiles.start(threadId);
+                this.threadSubagents.start(threadId, mode, feature);
+            },
+            finish: (threadId, succeeded, toolEvents, interrupted) => {
+                this.threadFiles.finish(threadId);
+                if (interrupted) {
+                    this.threadSubagents.interrupt(threadId);
+                    return;
+                }
+                this.threadSubagents.finish(
+                    threadId,
+                    succeeded,
+                    toolEvents
+                );
+            },
+            threadsChanged: (threads, activeThreadId) => {
+                this.postChatThreads(threads, activeThreadId);
+                this.threadSubagents.select(activeThreadId);
+            }
+        };
     }
 
     /**
-     * Stops the active sub-agent session monitor if one is running.
+     * Reposts the current thread index when the webview becomes ready.
      */
-    private stopSubagentMonitor(): void {
-        this.subagentMonitor?.stop();
-        this.subagentMonitor = undefined;
+    private sendChatThreads(): void {
+        this.postChatThreads(
+            this.chatThreads.summaries(),
+            this.chatThreads.activeThreadId()
+        );
+    }
+
+    /**
+     * Posts all live threads and the current transcript selection.
+     */
+    private postChatThreads(
+        threads: ChatThreadSummary[],
+        activeThreadId: string
+    ): void {
+        this.webview?.postMessage({
+            type: 'chatThreadsChanged',
+            threads,
+            activeThreadId
+        });
+    }
+
+    /**
+     * Posts one thread's latest progressively rendered response.
+     */
+    private postChatProgress(
+        threadId: string,
+        snapshot: ChatRunSnapshot
+    ): void {
+        this.webview?.postMessage({
+            type: 'chatProgress',
+            threadId,
+            ...snapshot
+        });
     }
 
     /**
@@ -757,7 +922,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     private postSubagentActivities(
         subagents: CodetetherSubagentActivity[]
     ): void {
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'subagentsChanged',
             subagents,
             summary: subagentSummary(subagents)
@@ -765,52 +930,13 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Extracts a displayable error message from unknown thrown values.
+     * Posts an extension-side sidebar failure without blaming Codetether.
      */
-    private chatErrorMessage(error: unknown): string {
-        return error instanceof Error
-            ? error.message
-            : 'Unknown error occurred';
-    }
-
-    /**
-     * Posts a user bubble to the webview.
-     */
-    private postUserMessage(content: string): void {
-        this.view?.webview.postMessage({
-            type: 'receiveMessage',
-            role: 'user',
-            content
-        });
-    }
-
-    /**
-     * Posts a successful assistant bubble and optional tool timeline.
-     */
-    private postAssistantMessage(
-        content: string,
-        toolEvents: CodetetherToolEvent[] = [],
-        sessionId?: string,
-        autoSpeak = false
-    ): void {
-        this.view?.webview.postMessage({
+    private postSidebarError(message: string): void {
+        this.webview?.postMessage({
             type: 'receiveMessage',
             role: 'assistant',
-            content,
-            toolEvents,
-            sessionId,
-            autoSpeak
-        });
-    }
-
-    /**
-     * Posts an assistant error bubble using the webview's error styling.
-     */
-    private postAssistantError(message: string): void {
-        this.view?.webview.postMessage({
-            type: 'receiveMessage',
-            role: 'assistant',
-            content: `**Codetether error:** ${message}`,
+            content: `**Sidebar error:** ${message}`,
             error: true
         });
     }
@@ -819,7 +945,7 @@ export class CodetetherChatViewProvider implements vscode.WebviewViewProvider {
      * Posts the busy/ready state shown in the webview status bar.
      */
     private postStatus(message: string, busy: boolean): void {
-        this.view?.webview.postMessage({
+        this.webview?.postMessage({
             type: 'status',
             message,
             busy

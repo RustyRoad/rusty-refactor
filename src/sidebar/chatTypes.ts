@@ -1,4 +1,5 @@
 import { ChatMessage } from '../codetetherClient';
+import { CodetetherModelOptions } from '../codetetherModelOptions';
 
 /**
  * Names the interaction style requested from Codetether for a message.
@@ -31,6 +32,7 @@ export type CodetetherFeature =
 export interface UserMessageRequest {
     text: string;
     model?: string;
+    modelOptions: CodetetherModelOptions;
     mode?: ChatMode;
     feature?: CodetetherFeature;
     includeContext: boolean;
@@ -38,10 +40,22 @@ export interface UserMessageRequest {
 }
 
 /**
+ * Describes one model choice shown by the chat webview.
+ *
+ * The opaque ID is sent back to CodeTether. The name and provider exist only
+ * to give the selector a stable, human-readable label.
+ */
+export interface SidebarModelOption {
+    id: string;
+    name: string;
+    provider: string;
+}
+
+/**
  * Captures the dependencies needed to build a model-listing message.
  */
 export interface ModelListPayload {
-    models: string[];
+    models: SidebarModelOption[];
     configuredModel: string;
     status?: string;
     discoveryTelemetry?: Record<string, unknown>;

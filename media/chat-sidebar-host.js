@@ -1,26 +1,45 @@
 /**
- * Handles an assistant or host-authored chat message from the extension host.
- *
- * User messages are ignored because they are optimistically rendered by the
- * webview before the request is sent.
+ * Handles a host-authored chat message for the thread that owns it.
  *
  * @param {object} message - Host message containing chat content.
  * @returns {void}
  */
 function handleReceiveMessage(message) {
-    if (message.role !== 'user') {
-        const record = appendMessage(
-            message.role,
-            message.content,
-            message.error,
-            message.toolEvents,
-            message.sessionId,
-        );
-        if (message.autoSpeak && !record.error) {
-            queueVoiceInputAfterSpeech(record.id);
-            startSpeech(record);
-        }
+    const record = appendMessage(
+        message.role,
+        message.content,
+        message.error,
+        message.toolEvents,
+        message.sessionId,
+        message.modelId,
+        message.threadId,
+    );
+    if (message.autoSpeak && !record.error) {
+        queueVoiceInputAfterSpeech(record.id);
+        startSpeech(record);
     }
+}
+
+/**
+ * Upserts one live assistant response without creating duplicate bubbles.
+ *
+ * @param {object} message - Host snapshot with a stable response id.
+ * @returns {void}
+ */
+function handleChatProgressMessage(message) {
+    upsertStreamingMessage({
+        id: message.id,
+        threadId: message.threadId,
+        content: message.content,
+        thinking: message.thinking,
+        phase: message.phase,
+        modelId: message.modelId,
+        toolEvents: message.toolEvents,
+        sessionId: message.sessionId,
+        streaming: message.streaming,
+        error: message.error,
+        autoSpeak: message.autoSpeak,
+    });
 }
 
 /**
@@ -57,22 +76,26 @@ function handleModelStatusMessage(message) {
 }
 
 /**
- * Resets the chat container after the host clears transcript state.
+ * Resets one thread transcript after the host clears current chat state.
  *
+ * @param {object} message - Host message naming the cleared thread.
  * @returns {void}
  */
-function handleClearedMessage() {
+function handleThreadClearedMessage(message) {
     stopSpeech();
-    dispatchChatState('clearChat');
-    chatContainer.innerHTML = '<div class="empty-state"'
-        + ' id="empty-state">Chat cleared.</div>';
-    setBusy(false, 'Ready');
+    const state = dispatchChatState('clearThreadMessages', {
+        threadId: message.threadId || '',
+    });
+    if (message.threadId === state.activeThreadId) {
+        renderActiveThreadTranscript('Chat cleared.');
+        setBusy(false, 'Ready');
+    }
 }
 
 /**
  * Updates model controls from a host model list response.
  *
- * @param {object} message - Host message with model list data.
+ * @param {object} message - Host message with model option data.
  * @returns {void}
  */
 function handleModelsListedMessage(message) {
@@ -85,6 +108,16 @@ function handleModelsListedMessage(message) {
 }
 
 /**
+ * Applies validated provider-runtime options received from the host.
+ *
+ * @param {object} message - Host message with persisted model options.
+ * @returns {void}
+ */
+function handleModelOptionsChangedMessage(message) {
+    populateModelRuntimeOptions(message.options || {});
+}
+
+/**
  * Updates the sessions panel from a host session list response.
  *
  * @param {object} message - Host message with session metadata.
@@ -92,6 +125,19 @@ function handleModelsListedMessage(message) {
  */
 function handleSessionsListedMessage(message) {
     renderSessions(message.sessions);
+}
+
+/**
+ * Updates live chat rows and the selected transcript from the host index.
+ *
+ * @param {object} message - Host message with live thread summaries.
+ * @returns {void}
+ */
+function handleChatThreadsChangedMessage(message) {
+    renderChatThreads(
+        message.threads || [],
+        message.activeThreadId || '',
+    );
 }
 
 /**
@@ -126,6 +172,9 @@ function handleHostMessage(event) {
         case 'receiveMessage':
             handleReceiveMessage(message);
             break;
+        case 'chatProgress':
+            handleChatProgressMessage(message);
+            break;
         case 'status':
             handleStatusMessage(message);
             break;
@@ -138,6 +187,9 @@ function handleHostMessage(event) {
         case 'speechState':
             handleSpeechStateMessage(message);
             break;
+        case 'speechAudio':
+            handleSpeechAudioMessage(message);
+            break;
         case 'speechVoicesListed':
             handleSpeechVoicesListedMessage(message);
             break;
@@ -147,14 +199,20 @@ function handleHostMessage(event) {
         case 'voiceInputResult':
             handleVoiceInputResultMessage(message);
             break;
-        case 'cleared':
-            handleClearedMessage();
+        case 'threadCleared':
+            handleThreadClearedMessage(message);
             break;
         case 'modelsListed':
             handleModelsListedMessage(message);
             break;
+        case 'modelOptionsChanged':
+            handleModelOptionsChangedMessage(message);
+            break;
         case 'sessionsListed':
             handleSessionsListedMessage(message);
+            break;
+        case 'chatThreadsChanged':
+            handleChatThreadsChangedMessage(message);
             break;
         case 'sessionLoaded':
             handleSessionLoadedMessage(message);

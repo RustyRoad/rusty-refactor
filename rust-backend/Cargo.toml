@@ -39,6 +39,8 @@ bstr = "1.9"
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"
+base64 = "0.22"
+ureq = { version = "2.12", features = ["json"] }
 
 # Cargo and project analysis
 cargo = "0.76"

@@ -1,7 +1,7 @@
 /**
  * Updates the busy state of controls and the visible status text.
  *
- * @param {boolean} nextBusy - Whether the webview should block input.
+ * @param {boolean} nextBusy - Whether a response is currently running.
  * @param {string} [message] - Optional status message to show.
  * @returns {void}
  */
@@ -10,8 +10,15 @@ function setBusy(nextBusy, message) {
         busy: nextBusy,
         message,
     });
-    byId('send-btn').disabled = state.busy;
-    promptInput.disabled = state.busy;
+    const sendButton = byId('send-btn');
+    sendButton.disabled = false;
+    sendButton.textContent = state.busy ? 'Steer' : 'Send';
+    sendButton.setAttribute(
+        'aria-label',
+        state.busy ? 'Steer active response' : 'Send prompt',
+    );
+    interruptButton.disabled = !state.busy;
+    promptInput.disabled = false;
     statusBar.classList.toggle('busy', state.busy);
     statusText.textContent = state.statusText;
     updateVoiceInputButtonIfReady();
@@ -35,7 +42,7 @@ function updateVoiceInputButtonIfReady() {
 /**
  * Counts how many models are available for each provider.
  *
- * @param {string[]} models - Model ids to group by provider prefix.
+ * @param {object[]} models - Model options to group by provider.
  * @returns {Object.<string, number>} Provider names mapped to model counts.
  */
 function providerCounts(models) {
@@ -79,37 +86,64 @@ function appendProviderChip(counts, provider) {
 /**
  * Renders provider filter chips for the supplied model list.
  *
- * @param {string[]} models - Model ids to summarize by provider.
+ * @param {object[]} models - Model options to summarize by provider.
  * @returns {void}
  */
 function renderProviderStrip(models) {
     providerStrip.innerHTML = '';
     const counts = providerCounts(models);
-    Object.keys(counts).sort().forEach(appendProviderChip.bind(null, counts));
+    Object.keys(counts)
+        .sort(chatStateApi.compareProviders)
+        .forEach(appendProviderChip.bind(null, counts));
 }
 
 /**
- * Returns whether a model should be visible under the active provider filter.
+ * Returns the model options visible under the active filters.
  *
- * @param {string} model - Model id to test.
- * @returns {boolean} True when the model passes the current provider filter.
+ * @returns {object[]} Filtered model options for the dropdown.
  */
-function isModelVisible(model) {
-    const state = getChatState();
-    return !state.activeProvider || getProvider(model) === state.activeProvider;
+function visibleModelOptions() {
+    return chatStateApi.visibleModels(getChatState());
 }
 
 /**
  * Appends one selectable model option to the model dropdown.
  *
- * @param {string} model - Model id to add as an option.
+ * @param {object} model - Model option to add to the dropdown.
+ * @param {string} [label] - Optional display label for the option.
  * @returns {void}
  */
-function appendModelOption(model) {
+function appendModelOption(model, label) {
     const option = document.createElement('option');
-    option.value = model;
-    option.textContent = model;
+    option.value = model.id;
+    option.textContent = label || chatStateApi.modelOptionLabel(model);
     modelInput.appendChild(option);
+}
+
+/**
+ * Keeps the active model visible even when filters hide it.
+ *
+ * Search and provider filters are browsing tools. They should not silently
+ * clear an already selected model before the user picks a replacement.
+ *
+ * @param {string} selected - Current selected model id.
+ * @param {object[]} visible - Filtered model options.
+ * @returns {void}
+ */
+function appendPinnedSelectedModel(selected, visible) {
+    const isVisible = visible.some(model => model.id === selected);
+    if (!selected || isVisible) {
+        return;
+    }
+
+    const state = getChatState();
+    const model = chatStateApi.modelOptionForId(state, selected) || {
+        id: selected,
+        name: selected,
+        provider: getProvider(selected),
+    };
+    const label = 'Selected: ' + chatStateApi.modelOptionLabel(model);
+    appendModelOption(model, label);
 }
 
 /**
@@ -124,15 +158,47 @@ function renderModelOptions() {
     const defaultOption = document.createElement('option');
     defaultOption.value = '';
     defaultOption.textContent = state.configuredDefaultModel
-        ? 'Default: ' + state.configuredDefaultModel
+        ? 'Default: ' + chatStateApi.modelLabelForId(
+            state,
+            state.configuredDefaultModel,
+        )
         : 'Default / automatic';
     modelInput.appendChild(defaultOption);
-    const visible = state.models.filter(isModelVisible);
-    visible.forEach(appendModelOption);
-    modelInput.value = visible.includes(previous) ? previous : '';
+    const visible = visibleModelOptions();
+    appendPinnedSelectedModel(previous, visible);
+    for (const model of visible) {
+        appendModelOption(model);
+    }
+    const previousVisible = visible.some(model => model.id === previous);
+    modelInput.value = previousVisible ? previous : '';
+    if (previous && !previousVisible) {
+        modelInput.value = previous;
+    }
     dispatchChatState('setSelectedModel', { model: modelInput.value });
     renderProviderStrip(getChatState().models);
     updateModelMeta();
+    renderModelRuntimeOptions();
+}
+
+/**
+ * Applies the model search box to dropdown rendering.
+ *
+ * @returns {void}
+ */
+function handleModelSearchInput() {
+    const state = dispatchChatState('setModelFilter', {
+        filter: modelSearchInput.value,
+    });
+    renderModelOptions();
+    logUiAction(
+        'modelSearchChanged',
+        'chars=' + String(modelSearchInput.value.length),
+    );
+    postTelemetry('modelSearchChanged', {
+        textLength: modelSearchInput.value.length,
+        activeProvider: state.activeProvider || 'all',
+        visibleModels: visibleModelOptions().length,
+    });
 }
 
 /**
@@ -147,7 +213,7 @@ function updateModelMeta() {
 /**
  * Replaces cached model data and refreshes model-related controls.
  *
- * @param {string[]} models - Model ids returned by the extension host.
+ * @param {object[]} models - Model options returned by the extension host.
  * @param {string} configuredModel - Persisted default model id.
  * @param {string} status - Human-readable status for the model list.
  * @param {object} discoveryTelemetry - Host-side discovery diagnostics.
@@ -165,7 +231,8 @@ function populateModels(
         status,
     });
     const counts = providerCounts(state.models);
-    const providers = Object.keys(counts).sort();
+    const providers = Object.keys(counts)
+        .sort(chatStateApi.compareProviders);
     postTelemetry('modelsListed', {
         totalModels: state.models.length,
         configuredDefaultModel: state.configuredDefaultModel || 'automatic',

@@ -1,0 +1,19 @@
+[Unit]
+Description=Kokoro text-to-speech API
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/riley/kokoro-tts-api
+Environment=PORT=8016
+Environment=KOKORO_DTYPE=fp32
+Environment=KOKORO_DEVICE=cuda
+Environment=KOKORO_VOICE=af_heart
+Environment=KOKORO_CACHE=/home/riley/.cache/kokoro-js
+Environment=LD_LIBRARY_PATH=/home/riley/.local/lib/cudnn
+ExecStart=/home/riley/.nvm/versions/node/v24.5.0/bin/node server.mjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

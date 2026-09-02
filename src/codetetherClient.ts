@@ -9,6 +9,17 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { ChildProcess, spawn } from 'child_process';
+import { CodetetherCliProgressParser } from './codetetherCliProgress';
+import {
+    CodetetherChatProgressSink,
+    codetetherCancelledError
+} from './codetetherChatProgress';
+import {
+    CodetetherRealtimeClient
+} from './codetetherRealtimeClient';
+import type {
+    CodetetherSteeringSender
+} from './codetetherRealtimeTypes';
 import {
     summarizeCodetetherProcessFailure
 } from './codetetherProcessFailure';
@@ -18,33 +29,79 @@ import {
 } from './codetetherSessionToolEvents';
 import { CodetetherToolEvent } from './codetetherToolEvents';
 import {
+    CodetetherVaultTokenManager
+} from './codetetherVaultToken';
+import {
+    readCodetetherVaultTokenFile
+} from './codetetherVaultTokenFile';
+import {
+    CodetetherManagedSessionStore
+} from './codetetherManagedSession';
+import { codetetherManagedServerKey } from
+    './codetetherManagedServerKey';
+import {
+    applyCodetetherModelOptions,
+    CodetetherModelOptions,
+    defaultCodetetherModelOptions
+} from './codetetherModelOptions';
+import {
     CodeTetherApiError,
     CodeTetherDiscoveryTelemetry,
-    CODE_TETHER_SERVER_SECRET_KEY,
-    CODE_TETHER_TOKEN_SECRET_KEY,
     CodeTetherClient
 } from './codeTetherApiClient';
+import {
+    buildCodetetherRunArguments,
+    CodetetherRunSessionMode
+} from './codetetherRunArguments';
+import { availableCodetetherModel } from './codetetherModelAvailability';
 import { logToOutput } from './extractor';
 
 const CODETETHER_HOSTNAME = '127.0.0.1';
 const CODETETHER_BASE_PORT = 4203;
 const CODETETHER_PORT_SCAN_LIMIT = 100;
-const CODETETHER_DEFAULT_MODEL = 'zai/glm-5';
 const SERVER_START_TIMEOUT_MS = 15000;
 const MODEL_LIST_TIMEOUT_MS = 15000;
 const CODETETHER_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const HEALTH_POLL_INTERVAL_MS = 250;
-const CODETETHER_SERVER_SECRET_KEY = 'rustyRefactor.codetetherServer';
-const CODETETHER_TOKEN_SECRET_KEY = 'rustyRefactor.codetetherToken';
+const ANSI_COLOR_PATTERN = new RegExp(
+    `${String.fromCharCode(27)}\\[[0-9;]*m`,
+    'g'
+);
+const CODETETHER_DEFAULT_VAULT_ADDRESS =
+    'https://vault.spotlessbinco.com';
+const CODETETHER_DEFAULT_VAULT_APP_ROLE =
+    'rusty-refactor-vscode';
 let defaultSecretStorage: vscode.SecretStorage | undefined;
+let defaultVaultTokenManager: CodetetherVaultTokenManager | undefined;
 
 /**
  * Registers extension SecretStorage for managed CodeTether sessions.
  */
 export function configureCodetetherSecretStorage(
     secretStorage: vscode.SecretStorage
-): void {
+): CodetetherVaultTokenManager {
     defaultSecretStorage = secretStorage;
+    const managedSessions = new CodetetherManagedSessionStore(
+        secretStorage
+    );
+    defaultVaultTokenManager?.dispose();
+    defaultVaultTokenManager = new CodetetherVaultTokenManager(
+        secretStorage,
+        {
+            address: codetetherVaultAddress,
+            roleName: codetetherVaultRoleName,
+            localToken: readCodetetherVaultTokenFile,
+            log: logToOutput,
+            onTokenChanged: async () => {
+                CodetetherServeManager.instance.disposeAll();
+                await managedSessions.clear();
+                logToOutput(
+                    '[Codetether] Cleared the stale managed server session.'
+                );
+            }
+        }
+    );
+    return defaultVaultTokenManager;
 }
 
 export interface JsToolCall {
@@ -59,6 +116,7 @@ export interface JsChatResponse {
     tool_calls?: JsToolCall[];
     tool_events?: CodetetherToolEvent[];
     session_id?: string;
+    model_id?: string;
 }
 
 export interface JsToolDefinition {
@@ -76,6 +134,7 @@ export interface ChatMessage {
 
 export interface AvailableModel {
     label: string;
+    provider: string;
     description: string;
     detail: string;
     modelId: string;
@@ -87,11 +146,15 @@ export interface CodetetherModelDiscovery {
     telemetry: CodeTetherDiscoveryTelemetry;
 }
 
-type CodetetherChatTransport = 'serve' | 'run';
+export type CodetetherChatTransport =
+    | 'websocket'
+    | 'serve'
+    | 'run';
 
 interface CodetetherClientOptions {
     skipNativeBridge?: boolean;
     secretStorage?: vscode.SecretStorage;
+    vaultTokenManager?: CodetetherVaultTokenManager;
 }
 
 class HttpStatusError extends Error {
@@ -110,43 +173,102 @@ interface AgentCard {
     version?: string;
 }
 
-interface A2ATextPart {
-    kind: 'text';
-    text: string;
+interface ServePromptOptions {
+    maxTokens?: number;
+    temperature?: number;
+    signal?: AbortSignal;
+    onProgress?: CodetetherChatProgressSink;
+    sessionId?: string;
+    sessionTitle?: string;
+    onSteeringReady?: (
+        sender: CodetetherSteeringSender
+    ) => void;
 }
 
-interface A2AMessage {
-    messageId: string;
-    role: 'user';
-    parts: A2ATextPart[];
+/**
+ * Configures one CodeTether chat request and its live progress channel.
+ */
+export interface CodetetherChatCompletionOptions {
+    model?: string;
+    modelOptions?: CodetetherModelOptions;
+    maxTokens?: number;
+    temperature?: number;
+    tools?: JsToolDefinition[];
+    preferCli?: boolean;
+    transport?: CodetetherChatTransport;
+    /**
+     * Chooses whether a `run` process resumes history or creates a session.
+     */
+    runSessionMode?: CodetetherRunSessionMode;
+    filePaths?: string[];
+    signal?: AbortSignal;
+    onProgress?: CodetetherChatProgressSink;
+    sessionId?: string;
+    sessionTitle?: string;
+    onSteeringReady?: (
+        sender: CodetetherSteeringSender
+    ) => void;
 }
 
-interface JsonRpcError {
-    code: number;
-    message: string;
-    data?: unknown;
+/**
+ * Encodes a JSON value for a JWT segment without padding.
+ */
+function base64UrlJson(value: unknown): string {
+    return Buffer.from(JSON.stringify(value), 'utf8')
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/u, '');
 }
 
-interface SendMessageBlockingResult {
-    id: string;
-    status: {
-        state: 'completed' | 'failed' | string;
-        message?: {
-            parts: A2ATextPart[];
-        };
-    };
-    artifacts: Array<{
-        artifactId: string;
-        parts: A2ATextPart[];
-    }>;
-    history: unknown[];
+/**
+ * Encodes random bytes for a JWT signature-looking segment.
+ */
+function base64UrlRandom(byteLength: number): string {
+    return crypto.randomBytes(byteLength)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/u, '');
 }
 
-interface SendMessageBlockingResponse {
-    jsonrpc: '2.0';
-    id: string | number;
-    result?: SendMessageBlockingResult;
-    error?: JsonRpcError;
+/**
+ * Creates the exact bearer secret for an extension-managed local server.
+ *
+ * Codetether validates this token by exact string match before reading the
+ * JWT-shaped payload. The `editor` role is enough for local model chat and
+ * model discovery without granting admin-only routes.
+ */
+function managedServerBearerToken(): string {
+    const header = base64UrlJson({ alg: 'none', typ: 'JWT' });
+    const payload = base64UrlJson({
+        sub: 'rusty-refactor-managed-server',
+        roles: ['editor'],
+        auth_source: 'jwt',
+        jti: crypto.randomBytes(16).toString('hex'),
+    });
+    const signature = base64UrlRandom(32);
+
+    return `${header}.${payload}.${signature}`;
+}
+
+/**
+ * Resolves the Vault server used to validate and renew provider credentials.
+ */
+function codetetherVaultAddress(): string {
+    const config = vscode.workspace.getConfiguration('rustyRefactor');
+    return config.get<string>('codetetherVaultAddress')
+        || process.env.VAULT_ADDR
+        || CODETETHER_DEFAULT_VAULT_ADDRESS;
+}
+
+/**
+ * Resolves the least-privilege AppRole used for Codetether provider reads.
+ */
+function codetetherVaultRoleName(): string {
+    const config = vscode.workspace.getConfiguration('rustyRefactor');
+    return config.get<string>('codetetherVaultAppRole')
+        || CODETETHER_DEFAULT_VAULT_APP_ROLE;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -201,8 +323,11 @@ async function findAvailablePort(startPort: number): Promise<number> {
  * Builds the environment used by extension-managed CodeTether processes.
  *
  * The generated auth token is shared with SecretStorage so HTTP clients can
- * call the same server. `OPA_FAIL_OPEN` is set because local extension-managed
- * servers should keep working when no local OPA sidecar is running.
+ * call the same server. The static token receives the built-in admin role
+ * because this private loopback server has no JWT identity provider. Local
+ * policy evaluation remains enabled without requiring an OPA sidecar.
+ * Cognition auto-start is disabled because extension requests use explicit
+ * model chat calls and should not start a background thinker loop.
  */
 function buildWorkspaceEnv(
     workspaceFolder: vscode.WorkspaceFolder,
@@ -213,35 +338,66 @@ function buildWorkspaceEnv(
     const currentPath = process.env.PATH ?? process.env.Path ?? '';
     const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
 
-    return {
+    const environment: NodeJS.ProcessEnv = {
         ...process.env,
         [pathKey]: `${workspaceBin}${path.delimiter}${currentPath}`,
         CODETETHER_AUTH_TOKEN: token,
+        CODETETHER_STATIC_TOKEN_ADMIN: 'true',
         OPA_ENABLED: 'false',
         OPA_FAIL_OPEN: 'true',
-        CODETETHER_DEFAULT_MODEL: model
+        CODETETHER_COGNITION_AUTO_START: 'false',
+        ...(model ? { CODETETHER_DEFAULT_MODEL: model } : {})
     };
+
+    if (!model) {
+        delete environment.CODETETHER_DEFAULT_MODEL;
+    }
+    return environment;
+}
+
+/**
+ * Adds a maintained Vault credential to one Codetether process environment.
+ */
+async function buildCodetetherProcessEnv(
+    workspaceFolder: vscode.WorkspaceFolder,
+    token: string,
+    model: string,
+    vaultTokens?: CodetetherVaultTokenManager,
+    modelOptions?: CodetetherModelOptions
+): Promise<NodeJS.ProcessEnv> {
+    const environment = buildWorkspaceEnv(
+        workspaceFolder,
+        token,
+        model
+    );
+    const authenticated = vaultTokens
+        ? await vaultTokens.environment(environment)
+        : environment;
+    return applyCodetetherModelOptions(
+        authenticated,
+        model,
+        modelOptions
+    );
 }
 
 class CodetetherServeProcess implements vscode.Disposable {
-    private readonly token = crypto.randomBytes(24).toString('hex');
-    private readonly portPromise: Promise<number>;
+    private readonly token = managedServerBearerToken();
+    private portPromise?: Promise<number>;
     private child: ChildProcess | null = null;
     private readyPromise: Promise<void> | null = null;
     private readonly stderrLines: string[] = [];
 
+    /**
+     * Creates one managed server with explicit auth and provider credentials.
+     */
     constructor(
         private readonly workspaceFolder: vscode.WorkspaceFolder,
         private readonly binaryPath: string,
         private readonly model: string,
-        private readonly secretStorage?: vscode.SecretStorage
-    ) {
-        this.portPromise = findAvailablePort(CODETETHER_BASE_PORT);
-    }
-
-    matches(binaryPath: string, model: string): boolean {
-        return this.binaryPath === binaryPath && this.model === model;
-    }
+        private readonly modelOptions: CodetetherModelOptions,
+        private readonly managedSessions?: CodetetherManagedSessionStore,
+        private readonly vaultTokens?: CodetetherVaultTokenManager
+    ) {}
 
     async ensureReady(): Promise<void> {
         if (this.readyPromise) {
@@ -263,43 +419,33 @@ class CodetetherServeProcess implements vscode.Disposable {
         return this.requestJson<AgentCard>('GET', '/a2a/.well-known/agent.json');
     }
 
-    async sendPrompt(prompt: string): Promise<JsChatResponse> {
+    /**
+     * Runs one agent prompt over the authenticated realtime session adapter.
+     */
+    async sendPrompt(
+        prompt: string,
+        options: ServePromptOptions = {}
+    ): Promise<JsChatResponse> {
         await this.ensureReady();
+        const port = await this.resolvePort();
+        const realtime = new CodetetherRealtimeClient(
+            CODETETHER_HOSTNAME,
+            port,
+            this.token
+        );
+        const response = await realtime.complete(prompt, {
+            sessionId: options.sessionId,
+            sessionTitle: options.sessionTitle,
+            signal: options.signal,
+            sink: options.onProgress,
+            onSteeringReady: options.onSteeringReady
+        });
 
-        const requestId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const payload = {
-            jsonrpc: '2.0' as const,
-            id: requestId,
-            method: 'message/send' as const,
-            params: {
-                message: {
-                    messageId: `msg-${requestId}`,
-                    role: 'user' as const,
-                    parts: [{ kind: 'text' as const, text: prompt }]
-                } satisfies A2AMessage,
-                configuration: {
-                    blocking: true
-                }
-            }
+        return {
+            text: response.text,
+            tool_events: response.toolEvents,
+            session_id: response.sessionId
         };
-
-        const response = await this.requestJson<SendMessageBlockingResponse>('POST', '/a2a', payload);
-        if (response.error) {
-            throw new Error(`CodeTether A2A error ${response.error.code}: ${response.error.message}`);
-        }
-
-        if (!response.result) {
-            throw new Error('CodeTether A2A returned no result.');
-        }
-
-        const result = response.result;
-        const text = this.collectResultText(result);
-
-        if (result.status.state !== 'completed') {
-            throw new Error(text || `CodeTether task ended in state "${result.status.state}".`);
-        }
-
-        return { text };
     }
 
     async checkHealth(): Promise<boolean> {
@@ -316,10 +462,19 @@ class CodetetherServeProcess implements vscode.Disposable {
         this.stop();
     }
 
+    /**
+     * Starts the server process after preparing its maintained Vault lease.
+     */
     private async startAndWaitForHealth(): Promise<void> {
-        const port = await this.portPromise;
+        const port = await this.resolvePort();
         const args = ['serve', '--hostname', CODETETHER_HOSTNAME, '--port', String(port)];
-        const env = buildWorkspaceEnv(this.workspaceFolder, this.token, this.model);
+        const env = await buildCodetetherProcessEnv(
+            this.workspaceFolder,
+            this.token,
+            this.model,
+            this.vaultTokens,
+            this.modelOptions
+        );
         await this.storeSessionSecrets(port);
 
         logToOutput(
@@ -382,30 +537,20 @@ class CodetetherServeProcess implements vscode.Disposable {
 
     /**
      * Stores the managed server URL and bearer token for API clients.
+     *
+     * Public so discovery can re-publish the credentials of a server that
+     * is already running; SecretStorage otherwise keeps whichever managed
+     * server wrote last, which may be a stopped or differently-keyed one.
      */
-    private async storeSessionSecrets(port: number): Promise<void> {
-        if (!this.secretStorage) {
+    async storeSessionSecrets(port?: number): Promise<void> {
+        if (!this.managedSessions) {
             return;
         }
 
-        const serverUrl = `http://${CODETETHER_HOSTNAME}:${port}`;
+        const resolvedPort = port ?? await this.resolvePort();
+        const serverUrl = `http://${CODETETHER_HOSTNAME}:${resolvedPort}`;
         try {
-            await this.secretStorage.store(
-                CODE_TETHER_SERVER_SECRET_KEY,
-                serverUrl
-            );
-            await this.secretStorage.store(
-                CODE_TETHER_TOKEN_SECRET_KEY,
-                this.token
-            );
-            await this.secretStorage.store(
-                CODETETHER_SERVER_SECRET_KEY,
-                serverUrl
-            );
-            await this.secretStorage.store(
-                CODETETHER_TOKEN_SECRET_KEY,
-                this.token
-            );
+            await this.managedSessions.store(serverUrl, this.token);
         } catch (error) {
             const message = error instanceof Error
                 ? error.message
@@ -453,38 +598,13 @@ class CodetetherServeProcess implements vscode.Disposable {
         return `${prefix}${stderrTail}`;
     }
 
-    private collectResultText(result: SendMessageBlockingResult): string {
-        const parts: string[] = [];
-        const statusText = this.collectTextParts(result.status.message?.parts);
-        if (statusText) {
-            parts.push(statusText);
-        }
-
-        for (const artifact of result.artifacts ?? []) {
-            const artifactText = this.collectTextParts(artifact.parts);
-            if (artifactText) {
-                parts.push(artifactText);
-            }
-        }
-
-        return parts.join('\n\n').trim();
-    }
-
-    private collectTextParts(parts?: A2ATextPart[]): string {
-        return (parts ?? [])
-            .filter(part => part.kind === 'text' && typeof part.text === 'string')
-            .map(part => part.text.trim())
-            .filter(Boolean)
-            .join('\n\n');
-    }
-
     private async requestJson<T>(method: 'GET' | 'POST', requestPath: string, body?: unknown): Promise<T> {
         const raw = await this.requestRaw(method, requestPath, body);
         return JSON.parse(raw) as T;
     }
 
     private async requestRaw(method: 'GET' | 'POST', requestPath: string, body?: unknown): Promise<string> {
-        const port = await this.portPromise;
+        const port = await this.resolvePort();
         const payload = body === undefined ? undefined : JSON.stringify(body);
 
         return new Promise((resolve, reject) => {
@@ -529,11 +649,23 @@ class CodetetherServeProcess implements vscode.Disposable {
             request.end();
         });
     }
+
+    /**
+     * Lazily reserves this process's port when serialized startup begins.
+     *
+     * Deferring the scan prevents concurrent process objects from observing
+     * the same free port before either server has bound it.
+     */
+    private resolvePort(): Promise<number> {
+        this.portPromise ??= findAvailablePort(CODETETHER_BASE_PORT);
+        return this.portPromise;
+    }
 }
 
 class CodetetherServeManager {
     private static singleton: CodetetherServeManager | null = null;
     private readonly servers = new Map<string, CodetetherServeProcess>();
+    private startupTail: Promise<void> = Promise.resolve();
 
     static get instance(): CodetetherServeManager {
         if (!this.singleton) {
@@ -543,19 +675,23 @@ class CodetetherServeManager {
         return this.singleton;
     }
 
+    /**
+     * Returns a healthy per-workspace server with the requested dependencies.
+     */
     async ensureServer(
         workspaceFolder: vscode.WorkspaceFolder,
         binaryPath: string,
         model: string,
-        secretStorage?: vscode.SecretStorage
+        modelOptions: CodetetherModelOptions,
+        managedSessions?: CodetetherManagedSessionStore,
+        vaultTokens?: CodetetherVaultTokenManager
     ): Promise<CodetetherServeProcess> {
-        const key = workspaceFolder.uri.toString();
-        const existing = this.servers.get(key);
-
-        if (existing && !existing.matches(binaryPath, model)) {
-            existing.dispose();
-            this.servers.delete(key);
-        }
+        const key = codetetherManagedServerKey(
+            workspaceFolder.uri.toString(),
+            binaryPath,
+            model,
+            modelOptions
+        );
 
         let server = this.servers.get(key);
         if (!server) {
@@ -563,13 +699,37 @@ class CodetetherServeManager {
                 workspaceFolder,
                 binaryPath,
                 model,
-                secretStorage
+                modelOptions,
+                managedSessions,
+                vaultTokens
             );
             this.servers.set(key, server);
         }
 
-        await server.ensureReady();
+        await this.ensureReadyInOrder(server);
         return server;
+    }
+
+    /**
+     * Serializes process startup so each server reserves a distinct port.
+     *
+     * Active turns remain concurrent after startup; only port selection and
+     * binding are ordered to remove their shared free-port race.
+     */
+    private async ensureReadyInOrder(
+        server: CodetetherServeProcess
+    ): Promise<void> {
+        const previous = this.startupTail;
+        let release = (): void => {};
+        this.startupTail = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        await previous;
+        try {
+            await server.ensureReady();
+        } finally {
+            release();
+        }
     }
 
     disposeAll(): void {
@@ -581,23 +741,36 @@ class CodetetherServeManager {
 }
 
 /**
- * Client that talks to Codetether using either `codetether serve` + A2A or `codetether run`.
+ * Client that talks to Codetether using `serve` chat or `run`.
  */
 export class CodetetherClient {
     private defaultModel: string;
     private binaryPath: string;
     private readonly skipNativeBridge: boolean;
     private readonly secretStorage?: vscode.SecretStorage;
+    private readonly managedSessions?: CodetetherManagedSessionStore;
+    private readonly vaultTokens?: CodetetherVaultTokenManager;
 
+    /**
+     * Creates a client from workspace settings and optional secret storage.
+     */
     constructor(options: CodetetherClientOptions = {}) {
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         this.defaultModel = config.get<string>('codetetherModel') || '';
         this.binaryPath = config.get<string>('codetetherBinaryPath') || 'codetether';
         this.skipNativeBridge = options.skipNativeBridge ?? false;
         this.secretStorage = options.secretStorage ?? defaultSecretStorage;
+        this.managedSessions = this.secretStorage
+            ? new CodetetherManagedSessionStore(this.secretStorage)
+            : undefined;
+        this.vaultTokens = options.vaultTokenManager
+            ?? defaultVaultTokenManager;
 
         if (this.skipNativeBridge) {
-            logToOutput('[Codetether] Native bridge skip flag is ignored for chat; chat uses `codetether serve`/A2A or `codetether run`.');
+            logToOutput(
+                '[Codetether] Native bridge skip flag is ignored for chat; '
+                + 'chat uses `codetether serve` or `codetether run`.'
+            );
         }
     }
 
@@ -619,64 +792,129 @@ export class CodetetherClient {
     /**
      * Sends chat messages through the configured Codetether transport.
      *
-     * CLI fallback sends only the newest user prompt because `run -c` carries
-     * session context and Windows rejects oversized argv payloads.
+     * Server transports use the authenticated realtime session endpoint.
      */
     async chatCompletion(
         messages: ChatMessage[],
-        options: {
-            model?: string;
-            maxTokens?: number;
-            temperature?: number;
-            tools?: JsToolDefinition[];
-            preferCli?: boolean;
-            transport?: CodetetherChatTransport;
-            allowCliFallback?: boolean;
-            filePaths?: string[];
-        } = {}
+        options: CodetetherChatCompletionOptions = {}
     ): Promise<JsChatResponse> {
         this.refreshConfig();
 
-        const workspaceFolder = this.resolveWorkspaceFolder(options.filePaths);
-        const model = options.model || this.defaultModel || CODETETHER_DEFAULT_MODEL;
-        const transport = options.transport ?? this.resolveChatTransport(options.preferCli);
+        const workspaceFolder = this.resolveWorkspaceFolder(
+            options.filePaths
+        );
+        const requestedModel = options.model || this.defaultModel;
+        const model = await this.resolveAvailableModel(requestedModel);
+        const transport = options.transport
+            ?? this.resolveChatTransport(options.preferCli);
 
         if (transport === 'run') {
             const prompt = this.lastUserMessage(messages);
-            return this.runViaCli(workspaceFolder, model, prompt);
+            const response = await this.runViaCli(
+                workspaceFolder,
+                model,
+                prompt,
+                options.runSessionMode ?? 'continue',
+                options.modelOptions,
+                options.signal,
+                options.onProgress
+            );
+            return this.withResponseModel(response, model);
         }
 
-        const prompt = this.buildPrompt(messages);
-
         if (options.tools && options.tools.length > 0) {
-            logToOutput('[Codetether] A2A transport does not support extension-side tool callbacks; ignoring requested tools.');
+            logToOutput(
+                '[Codetether] Realtime transport does not support '
+                + 'extension-side tool callbacks; ignoring requested tools.'
+            );
         }
 
         const server = await CodetetherServeManager.instance.ensureServer(
             workspaceFolder,
             this.binaryPath,
             model,
-            this.secretStorage
+            options.modelOptions || defaultCodetetherModelOptions(),
+            this.managedSessions,
+            this.vaultTokens
         );
 
         logToOutput(
-            `[Codetether] Sending A2A task to ${workspaceFolder.name} on ${CODETETHER_HOSTNAME} with model ${model}`
+            `[Codetether] Sending realtime chat request to `
+            + `${workspaceFolder.name} on ${CODETETHER_HOSTNAME} `
+            + `with model ${model}`
         );
 
+        const response = await server.sendPrompt(
+            this.lastUserMessage(messages),
+            {
+                maxTokens: options.maxTokens,
+                temperature: options.temperature,
+                signal: options.signal,
+                onProgress: options.onProgress,
+                sessionId: options.sessionId,
+                sessionTitle: options.sessionTitle,
+                onSteeringReady: options.onSteeringReady
+            }
+        );
+        return this.withResponseModel(response, model);
+    }
+
+    /**
+     * Attaches the exact requested model to a completed response.
+     */
+    private withResponseModel(
+        response: JsChatResponse,
+        model: string
+    ): JsChatResponse {
+        return {
+            ...response,
+            model_id: response.model_id || model
+        };
+    }
+
+    /**
+     * Revalidates a requested model against the live CodeTether endpoint.
+     *
+     * Discovery failures and stale IDs both select automatic routing so a
+     * cached provider can never make an otherwise valid CLI run fail.
+     */
+    private async resolveAvailableModel(requested: string): Promise<string> {
         try {
-            return await server.sendPrompt(prompt);
+            const discovery = await this.discoverModelPickerItems();
+            const available = discovery.items.map(item => item.modelId);
+            const resolved = availableCodetetherModel(
+                requested,
+                available
+            );
+            this.logModelResolution(requested, resolved, available.length);
+            return resolved;
         } catch (error) {
-            if (!this.isA2AForbiddenError(error)) {
-                throw error;
-            }
+            const message = error instanceof Error
+                ? error.message
+                : String(error);
+            logToOutput(
+                '[Codetether] Live model revalidation failed; using '
+                + `automatic provider routing: ${message}`
+            );
+            return '';
+        }
+    }
 
-            if (options.allowCliFallback === false) {
-                throw error;
-            }
-
-            logToOutput('[Codetether] A2A POST was forbidden by the local server; retrying with `codetether run`.');
-            const fallbackPrompt = this.lastUserMessage(messages);
-            return this.runViaCli(workspaceFolder, model, fallbackPrompt);
+    /**
+     * Records when live discovery replaces a stale explicit model.
+     */
+    private logModelResolution(
+        requested: string,
+        resolved: string,
+        availableCount: number
+    ): void {
+        const requestedId = requested.trim();
+        if (requestedId && !resolved) {
+            logToOutput(
+                `[Codetether] Model ${requestedId} is absent from the live `
+                + `endpoint (${availableCount} models); using automatic `
+                + 'provider routing.'
+            );
         }
     }
 
@@ -694,14 +932,11 @@ export class CodetetherClient {
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const configured = config.get<string>(
             'codetetherChatTransport'
-        ) || 'run';
-        return configured === 'run' ? 'run' : 'serve';
-    }
-
-    private isA2AForbiddenError(error: unknown): boolean {
-        return error instanceof HttpStatusError
-            && error.statusCode === 403
-            && error.requestPath === '/a2a';
+        ) || 'websocket';
+        if (configured === 'run') {
+            return 'run';
+        }
+        return configured === 'serve' ? 'serve' : 'websocket';
     }
 
     /**
@@ -710,12 +945,36 @@ export class CodetetherClient {
     private async runViaCli(
         workspaceFolder: vscode.WorkspaceFolder,
         model: string,
-        prompt: string
+        prompt: string,
+        sessionMode: CodetetherRunSessionMode,
+        modelOptions?: CodetetherModelOptions,
+        signal?: AbortSignal,
+        onProgress?: CodetetherChatProgressSink
     ): Promise<JsChatResponse> {
-        const env = buildWorkspaceEnv(workspaceFolder, crypto.randomBytes(12).toString('hex'), model);
-        const args = this.cliRunArgs(model, prompt);
+        if (signal?.aborted) {
+            throw codetetherCancelledError();
+        }
 
-        logToOutput(`[Codetether] Spawning CLI transport in ${workspaceFolder.uri.fsPath} with model ${model}`);
+        const token = crypto.randomBytes(12).toString('hex');
+        const env = await buildCodetetherProcessEnv(
+            workspaceFolder,
+            token,
+            model,
+            this.vaultTokens,
+            modelOptions
+        );
+        const args = buildCodetetherRunArguments({
+            model,
+            prompt,
+            sessionMode
+        });
+        const progressParser = new CodetetherCliProgressParser(onProgress);
+
+        const modelLabel = model || 'automatic';
+        logToOutput(
+            `[Codetether] Spawning CLI transport in ` +
+            `${workspaceFolder.uri.fsPath} with model ${modelLabel}`
+        );
 
         return new Promise((resolve, reject) => {
             const proc = spawn(this.binaryPath, args, {
@@ -728,27 +987,52 @@ export class CodetetherClient {
             let stdout = '';
             let stderr = '';
             let settled = false;
+            const cleanup = (): void => {
+                clearTimeout(timeout);
+                signal?.removeEventListener('abort', onAbort);
+            };
+            const onAbort = (): void => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                try {
+                    proc.kill();
+                } catch {
+                    // The process already exited while steering was queued.
+                }
+                reject(codetetherCancelledError());
+            };
             const timeout = setTimeout(() => {
                 if (settled) {
                     return;
                 }
 
                 settled = true;
+                cleanup();
                 logToOutput(`[Codetether] CLI transport timed out after ${CODETETHER_RUN_TIMEOUT_MS}ms.`);
                 try {
                     proc.kill();
                 } catch {
                     // The process is already gone or cannot be killed; rejecting unblocks the caller.
                 }
-                reject(new Error('Codetether run timed out. Check the Codetether terminal/output for a stuck request.'));
+                reject(new Error(
+                    'Codetether run timed out. Check the Codetether ' +
+                    'terminal/output for a stuck request.'
+                ));
             }, CODETETHER_RUN_TIMEOUT_MS);
+            signal?.addEventListener('abort', onAbort, { once: true });
 
             proc.stdout?.on('data', (data) => {
                 stdout += data.toString();
             });
 
             proc.stderr?.on('data', (data) => {
-                stderr += data.toString();
+                const chunk = data.toString();
+                stderr += chunk;
+                progressParser.push(chunk);
             });
 
             proc.on('error', (err) => {
@@ -757,9 +1041,13 @@ export class CodetetherClient {
                 }
 
                 settled = true;
-                clearTimeout(timeout);
-                logToOutput(`[Codetether] CLI transport spawn failed: ${err.message}`);
-                reject(new Error(`Failed to spawn codetether CLI transport: ${err.message}`));
+                cleanup();
+                logToOutput(
+                    `[Codetether] CLI transport spawn failed: ${err.message}`
+                );
+                reject(new Error(
+                    `Failed to spawn codetether CLI transport: ${err.message}`
+                ));
             });
 
             proc.on('close', (code) => {
@@ -768,7 +1056,8 @@ export class CodetetherClient {
                 }
 
                 settled = true;
-                clearTimeout(timeout);
+                cleanup();
+                progressParser.finish();
                 if (code !== 0) {
                     const detail = summarizeCodetetherProcessFailure(
                         stderr,
@@ -785,23 +1074,6 @@ export class CodetetherClient {
                 ).then(resolve, reject);
             });
         });
-    }
-
-    /**
-     * Builds the `codetether run -c` argv for one sidebar request.
-     *
-     * Continuing the session lets the extension send only the latest prompt
-     * while Codetether owns conversation state in its session store.
-     */
-    private cliRunArgs(model: string, prompt: string): string[] {
-        const args = ['run', '-c'];
-
-        if (model) {
-            args.push('--model', model);
-        }
-
-        args.push('--format', 'json', prompt);
-        return args;
     }
 
     /**
@@ -895,10 +1167,31 @@ export class CodetetherClient {
         throw new Error('Open a workspace folder before using Codetether.');
     }
 
-    private buildModelListEnv(workspaceFolder: vscode.WorkspaceFolder | undefined): NodeJS.ProcessEnv {
-        const baseEnv = workspaceFolder
-            ? buildWorkspaceEnv(workspaceFolder, crypto.randomBytes(12).toString('hex'), this.defaultModel || CODETETHER_DEFAULT_MODEL)
-            : { ...process.env };
+    /**
+     * Builds model-discovery environment variables with maintained Vault auth.
+     */
+    private async buildModelListEnv(
+        workspaceFolder: vscode.WorkspaceFolder | undefined
+    ): Promise<NodeJS.ProcessEnv> {
+        const token = crypto.randomBytes(12).toString('hex');
+        const model = this.defaultModel;
+        let baseEnv: NodeJS.ProcessEnv;
+
+        if (workspaceFolder) {
+            baseEnv = await buildCodetetherProcessEnv(
+                workspaceFolder,
+                token,
+                model,
+                this.vaultTokens
+            );
+        } else if (this.vaultTokens) {
+            baseEnv = await this.vaultTokens.environment({
+                ...process.env
+            });
+        } else {
+            baseEnv = { ...process.env };
+        }
+
         const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
         const pathValue = baseEnv[pathKey] ?? baseEnv.PATH ?? baseEnv.Path ?? '';
 
@@ -921,10 +1214,13 @@ export class CodetetherClient {
         return [...new Set(groups.flat().map(model => model.trim()).filter(Boolean))].sort();
     }
 
+    /**
+     * Lists provider models through a short-lived authenticated CLI process.
+     */
     private async listModelsViaCli(): Promise<string[]> {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const cwd = workspaceFolder?.uri.fsPath;
-        const env = this.buildModelListEnv(workspaceFolder);
+        const env = await this.buildModelListEnv(workspaceFolder);
 
         logToOutput(`[Codetether] Listing models via CLI: ${this.binaryPath} models${cwd ? ` (cwd: ${cwd})` : ''}.`);
 
@@ -939,7 +1235,23 @@ export class CodetetherClient {
             let stdout = '';
             let stderr = '';
             let settled = false;
-            let timeout: NodeJS.Timeout | undefined;
+            const timeout = setTimeout(() => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                logToOutput(
+                    '[Codetether] listModels CLI timed out after '
+                    + `${MODEL_LIST_TIMEOUT_MS}ms; using default/manual `
+                    + 'model selection.'
+                );
+                try {
+                    proc.kill();
+                } catch {
+                    // Resolving is enough when the process already exited.
+                }
+                resolve([]);
+            }, MODEL_LIST_TIMEOUT_MS);
 
             proc.stdout?.on('data', (data) => {
                 const text = data.toString();
@@ -998,19 +1310,6 @@ export class CodetetherClient {
                 resolve(models);
              });
 
-             timeout = setTimeout(() => {
-                if (settled) {
-                    return;
-                }
-                settled = true;
-                logToOutput(`[Codetether] listModels CLI timed out after ${MODEL_LIST_TIMEOUT_MS}ms; using default/manual model selection.`);
-                try {
-                    proc.kill();
-                } catch {
-                    // Ignore kill failures; resolving is enough to unblock the UI.
-                }
-                resolve([]);
-            }, MODEL_LIST_TIMEOUT_MS);
          });
      }
 
@@ -1019,7 +1318,9 @@ export class CodetetherClient {
         let currentProvider = '';
 
         for (const rawLine of output.split(/\r?\n/)) {
-            const line = rawLine.replace(/\u001b\[[0-9;]*m/g, '').replace(/\r/g, '');
+            const line = rawLine
+                .replace(ANSI_COLOR_PATTERN, '')
+                .replace(/\r/g, '');
             const trimmed = line.trim();
 
             if (!trimmed) {
@@ -1073,7 +1374,12 @@ export class CodetetherClient {
         const token = crypto.randomBytes(24).toString('hex');
         const port = await findAvailablePort(CODETETHER_BASE_PORT + CODETETHER_PORT_SCAN_LIMIT);
         const args = ['serve', '--hostname', CODETETHER_HOSTNAME, '--port', String(port)];
-        const serveEnv = { ...env, CODETETHER_AUTH_TOKEN: token, OPA_ENABLED: 'false' };
+        const serveEnv = {
+            ...env,
+            CODETETHER_AUTH_TOKEN: token,
+            CODETETHER_STATIC_TOKEN_ADMIN: 'true',
+            OPA_ENABLED: 'false'
+        };
         const proc = spawn(this.binaryPath, args, {
             cwd,
             env: serveEnv,
@@ -1177,16 +1483,25 @@ export class CodetetherClient {
         }
     }
 
-    async checkAvailable(): Promise<{ available: boolean; version?: string; error?: string }> {
+    /**
+     * Starts the configured server and reports its health and version.
+     */
+    async checkAvailable(): Promise<{
+        available: boolean;
+        version?: string;
+        error?: string;
+    }> {
         try {
             this.refreshConfig();
             const workspaceFolder = this.resolveWorkspaceFolder();
-            const model = this.defaultModel || CODETETHER_DEFAULT_MODEL;
+            const model = this.defaultModel;
             const server = await CodetetherServeManager.instance.ensureServer(
                 workspaceFolder,
                 this.binaryPath,
                 model,
-                this.secretStorage
+                defaultCodetetherModelOptions(),
+                this.managedSessions,
+                this.vaultTokens
             );
             const healthy = await server.checkHealth();
             if (!healthy) {
@@ -1215,6 +1530,7 @@ export class CodetetherClient {
      * Lists picker-ready models with endpoint discovery telemetry.
      */
     async discoverModelPickerItems(): Promise<CodetetherModelDiscovery> {
+        await this.vaultTokens?.initialize();
         const apiClient = new CodeTetherClient(this.secretStorage);
         await this.ensureModelDiscoverySession(apiClient);
 
@@ -1226,8 +1542,8 @@ export class CodetetherClient {
             }
 
             logToOutput(
-                '[Codetether] Stored model endpoint is unavailable;' +
-                ' starting a fresh managed server.'
+                '[Codetether] Stored model endpoint credentials are stale;' +
+                ' re-publishing the managed server credentials.'
             );
             await this.startManagedModelDiscoverySession();
             return this.discoverModelPickerItemsFromApi(
@@ -1245,6 +1561,7 @@ export class CodetetherClient {
         const discovery = await apiClient.discoverVscodeModels();
         const items = discovery.models.map(model => ({
             label: model.name,
+            provider: model.vendor,
             description: `${model.vendor}/${model.family}`,
             detail: [
                 `Vendor: ${model.vendor}`,
@@ -1265,14 +1582,22 @@ export class CodetetherClient {
     }
 
     /**
-     * Returns whether a stale managed session should be replaced once.
+     * Returns whether stale managed connection details should be replaced.
+     *
+     * A managed server may outlive SecretStorage or be restarted with a new
+     * generated token. Explicit user-managed credentials are never rotated.
      */
     private shouldRetryManagedDiscovery(error: unknown): boolean {
         if (!(error instanceof CodeTetherApiError)) {
             return false;
         }
 
-        if (error.kind !== 'network' && error.kind !== 'timeout') {
+        const retryable = [
+            'auth',
+            'network',
+            'timeout'
+        ].includes(error.kind);
+        if (!retryable) {
             return false;
         }
 
@@ -1299,18 +1624,26 @@ export class CodetetherClient {
 
     /**
      * Starts or reuses the extension-managed CodeTether server.
+     *
+     * The live server's URL and bearer token are always re-published to
+     * SecretStorage. A reused server never rewrites them on its own, so a
+     * stale pair left by an earlier server would otherwise keep producing
+     * 401 "token missing/wrong" discovery failures.
      */
     private async startManagedModelDiscoverySession(): Promise<void> {
         this.refreshConfig();
         const workspaceFolder = this.resolveWorkspaceFolder();
-        const model = this.defaultModel || CODETETHER_DEFAULT_MODEL;
+        const model = '';
 
-        await CodetetherServeManager.instance.ensureServer(
+        const server = await CodetetherServeManager.instance.ensureServer(
             workspaceFolder,
             this.binaryPath,
             model,
-            this.secretStorage
+            defaultCodetetherModelOptions(),
+            this.managedSessions,
+            this.vaultTokens
         );
+        await server.storeSessionSecrets();
     }
 
     /**
@@ -1333,12 +1666,13 @@ export class CodetetherClient {
     private shouldStartManagedDiscoveryServer(): boolean {
         const config = vscode.workspace.getConfiguration('rustyRefactor');
         const transport = config.get<string>('codetetherChatTransport') ||
-            'run';
+            'websocket';
 
         return !this.hasExplicitServerConfiguration() || Boolean(
             config.get<boolean>('codeTether.enabled') ||
             config.get<boolean>('useCodetether') ||
-            transport === 'serve'
+            transport === 'serve' ||
+            transport === 'websocket'
         );
     }
 
@@ -1358,7 +1692,7 @@ export class CodetetherClient {
         this.refreshConfig();
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const cwd = workspaceFolder?.uri.fsPath;
-        const env = this.buildModelListEnv(workspaceFolder);
+        const env = await this.buildModelListEnv(workspaceFolder);
         const groups: string[][] = [];
 
         // Probe remote A2A server first — cheapest and most complete
@@ -1773,6 +2107,7 @@ export class UnifiedModelClient {
 
             return vscodeModels.map(model => ({
                 label: model.name || `${model.vendor}/${model.family}`,
+                provider: model.vendor,
                 description: `${model.vendor}/${model.family}`,
                 detail: [
                     `Vendor: ${model.vendor}`,

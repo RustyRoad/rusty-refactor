@@ -1,5 +1,5 @@
 /**
- * Builds expandable prompt, voice, and context controls for chat.
+ * Builds expandable prompt and context controls for chat.
  */
 export class ChatRunSettingsMarkup {
     /**
@@ -11,7 +11,6 @@ export class ChatRunSettingsMarkup {
             this.summary(),
             '<div class="run-settings-body">',
             this.modeControls(),
-            this.voiceControls(),
             this.voiceInputControls(),
             '</div>',
             '</details>',
@@ -66,20 +65,6 @@ export class ChatRunSettingsMarkup {
             '<input id="context-toggle" type="checkbox" checked>',
             'Include active editor context',
             '</label>',
-        ].join('\n');
-    }
-
-    /**
-     * Returns voice selection controls for assistant read-aloud playback.
-     */
-    private voiceControls(): string {
-        return [
-            '<div class="voice-row">',
-            '<label for="voice-input">Voice</label>',
-            '<select id="voice-input" aria-label="Read aloud voice">',
-            '<option value="">Automatic voice</option>',
-            '</select>',
-            '</div>',
         ].join('\n');
     }
 

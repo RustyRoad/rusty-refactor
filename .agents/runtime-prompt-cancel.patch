@@ -1,0 +1,66 @@
+diff --git a/src/server/session_realtime/prompt_run.rs b/src/server/session_realtime/prompt_run.rs
+--- a/src/server/session_realtime/prompt_run.rs
++++ b/src/server/session_realtime/prompt_run.rs
+@@ -20,6 +20,12 @@ impl PromptRun {
+         let task = tokio::spawn(execute(session_id, message, event_tx));
+         Self { events, task }
+     }
++
++    /// Aborts the prompt and waits until its owned resources are dropped.
++    pub(super) async fn cancel(&mut self) {
++        self.task.abort();
++        let _ = (&mut self.task).await;
++    }
+ }
+ 
+ /// Load, execute, and persist one session prompt.
+@@ -42,3 +48,38 @@ async fn execute(
+     session.save().await.map_err(|error| error.to_string())?;
+     Ok(result)
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::sync::atomic::{AtomicBool, Ordering};
++    use std::sync::Arc;
++
++    use super::*;
++
++    /// Records whether cancellation dropped the prompt future's resources.
++    struct CleanupProbe(Arc<AtomicBool>);
++
++    impl Drop for CleanupProbe {
++        /// Marks prompt-owned cleanup as complete.
++        fn drop(&mut self) {
++            self.0.store(true, Ordering::SeqCst);
++        }
++    }
++
++    /// Proves cancellation finishes prompt cleanup before returning.
++    #[tokio::test]
++    async fn cancel_waits_for_prompt_cleanup() {
++        let cleaned = Arc::new(AtomicBool::new(false));
++        let probe = CleanupProbe(Arc::clone(&cleaned));
++        let (_event_tx, events) = mpsc::channel(1);
++        let task = tokio::spawn(async move {
++            let _probe = probe;
++            std::future::pending::<Result<SessionResult, String>>().await
++        });
++        let mut run = PromptRun { events, task };
++
++        run.cancel().await;
++
++        assert!(cleaned.load(Ordering::SeqCst));
++    }
++}
+diff --git a/src/server/session_realtime/turn.rs b/src/server/session_realtime/turn.rs
+--- a/src/server/session_realtime/turn.rs
++++ b/src/server/session_realtime/turn.rs
+@@ -28,6 +28,6 @@ pub(super) async fn run(
+         {
+             turn_step::TurnStep::Continue => {}
+             turn_step::TurnStep::Abort => {
+-                run.task.abort();
++                run.cancel().await;
+                 return;
+             }

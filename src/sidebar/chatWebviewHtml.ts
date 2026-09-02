@@ -27,10 +27,10 @@ export class ChatWebviewHtml {
         const styleUri = this.assetUri(
             webview,
             extensionUri,
-            'chat-sidebar.css',
+            ['media', 'chat-sidebar.css'],
         );
-        const scriptUris = this.scripts.names().map((name) => {
-            return this.assetUri(webview, extensionUri, name);
+        const scriptUris = this.scripts.paths().map((path) => {
+            return this.assetUri(webview, extensionUri, path);
         });
 
         return [
@@ -59,8 +59,19 @@ export class ChatWebviewHtml {
             this.controls.controls(),
             `<div id="chat-container">${this.suggestions.emptyState()}</div>`,
             this.controls.subagentPanel(),
+            this.composerMarkup(),
+        ].join('\n');
+    }
+
+    /**
+     * Groups prompt status and input into one cohesive composer surface.
+     */
+    private composerMarkup(): string {
+        return [
+            '<section class="composer-shell" aria-label="Chat composer">',
             this.controls.statusBar(),
             this.controls.inputControls(),
+            '</section>',
         ].join('\n');
     }
 
@@ -74,17 +85,16 @@ export class ChatWebviewHtml {
     }
 
     /**
-     * Returns the webview URI for a static sidebar asset.
+     * Returns the webview URI for one extension-relative sidebar asset.
      */
     private assetUri(
         webview: vscode.Webview,
         extensionUri: vscode.Uri,
-        fileName: string,
+        path: string[],
     ): vscode.Uri {
         return webview.asWebviewUri(vscode.Uri.joinPath(
             extensionUri,
-            'media',
-            fileName,
+            ...path,
         ));
     }
 

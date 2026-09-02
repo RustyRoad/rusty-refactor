@@ -1,0 +1,39 @@
+diff --git a/src/tool/process_tree/windows.rs b/src/tool/process_tree/windows.rs
+--- a/src/tool/process_tree/windows.rs
++++ b/src/tool/process_tree/windows.rs
+@@ -1,6 +1,7 @@
+ //! Windows Job Object ownership for cancellable tool processes.
+ 
+ use std::io;
++use std::os::windows::process::CommandExt;
+ use std::process::{Command as StdCommand, Stdio};
+ 
+ use tokio::process::Command;
+@@ -55,14 +56,16 @@ impl Guard {
+ 
+     /// Terminates every process assigned beneath the command root.
+     pub(super) fn terminate(&mut self) {
++        if let Some(pid) = self.pid.take() {
++            terminate_with_taskkill(pid);
++        }
+         if let Some(job) = self.job.take() {
+-            if unsafe { TerminateJobObject(job.0, 1) }.is_ok() {
+-                self.pid = None;
+-                return;
++            if let Err(error) = unsafe { TerminateJobObject(job.0, 1) } {
++                tracing::warn!(
++                    error = %error,
++                    "Failed to terminate cancelled process Job Object"
++                );
+             }
+         }
+-        if let Some(pid) = self.pid.take() {
+-            terminate_with_taskkill(pid);
+-        }
+     }
+ }
+@@ -101,3 +103,4 @@ fn terminate_with_taskkill(pid: u32) {
+     let status = StdCommand::new("taskkill.exe")
+         .args(["/PID", &pid.to_string(), "/T", "/F"])
++        .creation_flags(0x0800_0000)
+         .stdin(Stdio::null())

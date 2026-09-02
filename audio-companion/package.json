@@ -1,0 +1,55 @@
+{
+  "name": "rusty-refactor-audio",
+  "displayName": "Rusty Refactor Windows Audio",
+  "description": "Local Windows microphone companion for Remote-SSH.",
+  "version": "0.6.35",
+  "publisher": "rusty-refactor",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onCommand:rustyRefactor.audio.status",
+    "onCommand:rustyRefactor.audio.capture",
+    "onCommand:rustyRefactor.audio.cancel"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rustyRefactor.audio.status",
+        "title": "Rusty Refactor Audio: Check Status"
+      },
+      {
+        "command": "rustyRefactor.audio.capture",
+        "title": "Rusty Refactor Audio: Capture Speech"
+      },
+      {
+        "command": "rustyRefactor.audio.cancel",
+        "title": "Rusty Refactor Audio: Cancel Capture"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "rustyRefactor.audio.status",
+          "when": "false"
+        },
+        {
+          "command": "rustyRefactor.audio.capture",
+          "when": "false"
+        },
+        {
+          "command": "rustyRefactor.audio.cancel",
+          "when": "false"
+        }
+      ]
+    }
+  }
+}

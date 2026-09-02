@@ -11,25 +11,67 @@ fn chat_state_spec() {
     defaults.statusText = "Ready"
     defaults.busyStatusText = "Working..."
     defaults.modelStatus = "Loading models..."
+    defaults.modelFilter = ""
+    defaults.activeThreadId = ""
+    defaults.sessionView = "active"
     defaults.mode = "chat"
     defaults.feature = "auto"
     defaults.includeContext = true
+    defaults.speechBackend = "server"
     defaults.voiceInputSupported = false
     defaults.voiceInputActive = false
     defaults.voiceInputSource = "windows-default"
     defaults.subagentSummary = ""
+    let model_options = map()
+    model_options.bedrockThinkingEffort = "medium"
+    model_options.bedrockServiceTier = "default"
+    model_options.codexThinkingEffort = "default"
+    model_options.openRouterThinkingEffort = "default"
+    defaults.modelOptions = model_options
 
     let spec = map()
-    spec.version = 1
+    spec.version = 6
     spec.name = "codetether-chat-state"
     spec.defaults = defaults
+    spec.messageFields = [
+        "id",
+        "role",
+        "content",
+        "thinking",
+        "phase",
+        "modelId",
+        "streaming",
+        "error",
+        "sessionId",
+        "toolEvents",
+        "autoSpeak",
+        "createdAt",
+        "threadId"
+    ]
+    spec.modelFields = [
+        "id",
+        "name",
+        "provider"
+    ]
+    spec.threadFields = [
+        "id",
+        "title",
+        "busy",
+        "statusText",
+        "updatedAt",
+        "sessionId"
+    ]
     spec.actions = [
         "appendMessage",
+        "chatThreadsListed",
         "clearChat",
         "clearMessages",
+        "clearThreadMessages",
         "hostMessageReceived",
         "modelsListed",
+        "replaceThreadMessages",
         "sessionsListed",
+        "setActiveThread",
         "setActiveProvider",
         "setBusy",
         "setCustomModel",
@@ -38,9 +80,13 @@ fn chat_state_spec() {
         "setIncludeContext",
         "setMode",
         "setModelStatus",
+        "setModelFilter",
+        "setModelOptions",
         "setSelectedModel",
         "setSelectedVoice",
+        "setSessionView",
         "setSpeakingMessage",
+        "setSpeechBackend",
         "setSpeechVoices",
         "setSpeechSupported",
         "setSubagents",
@@ -48,8 +94,40 @@ fn chat_state_spec() {
         "setVoiceInputSource",
         "setVoiceInputSources",
         "setVoiceInputSupported",
-        "toggleProvider"
+        "toggleProvider",
+        "upsertStreamingMessage"
     ]
+    let model_option_choices = map()
+    model_option_choices.bedrockThinkingEfforts = [
+        "low",
+        "medium",
+        "high"
+    ]
+    model_option_choices.bedrockServiceTiers = [
+        "default",
+        "standard",
+        "priority"
+    ]
+    model_option_choices.codexThinkingEfforts = [
+        "default",
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+    ]
+    model_option_choices.openRouterThinkingEfforts = [
+        "default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+    ]
+    spec.modelOptionChoices = model_option_choices
     spec.modes = [
         "chat",
         "agent",

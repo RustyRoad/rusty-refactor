@@ -1,9 +1,9 @@
 /**
  * Sends the current prompt and model settings to the extension host.
  *
- * Empty prompts and concurrent sends are blocked locally. Successful sends add
- * the user message immediately, clear the input, and mark the view busy until
- * the host reports status.
+ * Empty prompts are blocked locally. Sending while busy becomes a steering
+ * update: the host interrupts the active request and continues with the new
+ * direction. Every accepted prompt is rendered optimistically.
  *
  * @param {object} options - Send options supplied by click or voice input.
  * @returns {void}
@@ -11,7 +11,7 @@
 function sendMessage(options) {
     const fromVoice = Boolean(options && options.fromVoice);
     const text = promptInput.value.trim();
-    const model = getSelectedModel();
+    const model = getRequestModel();
     const blockedReason = chatStateApi.sendBlockedReason(
         getChatState(),
         text,
@@ -38,8 +38,10 @@ function sendMessage(options) {
     vscode.postMessage({
         type: 'sendMessage',
         value: {
+            threadId: getChatState().activeThreadId,
             text,
             model: model || undefined,
+            modelOptions: modelRuntimeOptionsForRequest(),
             mode: modeInput.value,
             feature: featureInput.value,
             includeContext: Boolean(contextToggle && contextToggle.checked),
@@ -80,7 +82,42 @@ function postSendMessageTelemetry(text, model, fromVoice) {
  */
 function clearChat() {
     logUiAction('clearChat', 'button=clear-btn');
-    vscode.postMessage({ type: 'clearChat' });
+    vscode.postMessage({
+        type: 'clearChat',
+        value: { threadId: getChatState().activeThreadId },
+    });
+}
+
+/**
+ * Requests a separate Rusty Refactor chat window from the extension host.
+ *
+ * @returns {void}
+ */
+function openChatWindow() {
+    logUiAction('openChatWindow', 'button=popout-chat-btn');
+    vscode.postMessage({ type: 'openChatWindow' });
+}
+
+/**
+ * Requests a hard stop for only the selected active chat response.
+ *
+ * @returns {void}
+ */
+function interruptChat() {
+    const state = getChatState();
+    const thread = chatStateApi.activeThread(state);
+    if (!thread || !thread.busy) {
+        return;
+    }
+
+    logUiAction('interruptChat', 'thread=' + String(thread.id));
+    postTelemetry('interruptChat', { threadId: thread.id });
+    interruptButton.disabled = true;
+    statusText.textContent = 'Interrupting...';
+    vscode.postMessage({
+        type: 'interruptChat',
+        value: { threadId: thread.id },
+    });
 }
 
 /**
@@ -94,18 +131,50 @@ function openTui() {
 }
 
 /**
- * Requests a fresh model list from the extension host.
+ * Sends one model revalidation request to the extension host.
  *
+ * @param {string} source - UI surface that requested current models.
  * @returns {void}
  */
-function refreshModels() {
-    logUiAction('refreshModels', 'button=refresh-btn');
+function requestModelRefresh(source) {
+    logUiAction('refreshModels', 'source=' + source);
     postTelemetry('refreshModels', {
-        source: 'toolbar',
+        source,
         activeProvider: getChatState().activeProvider || 'all',
     });
     vscode.postMessage({ type: 'refreshModels' });
 }
+
+/**
+ * Requests a fresh model list from the toolbar refresh button.
+ *
+ * @returns {void}
+ */
+function refreshModels() {
+    requestModelRefresh('toolbar');
+}
+
+/**
+ * Revalidates cached selector choices when the user opens the control.
+ *
+ * Cached options remain usable while the host checks the current Codetether
+ * endpoint. Pointer and focus events can accompany the same interaction, so
+ * a short guard coalesces them into one request.
+ *
+ * @returns {void}
+ */
+function refreshModelsForSelector() {
+    const now = Date.now();
+    const elapsed = now - refreshModelsForSelector.lastRequestAt;
+    if (elapsed < 500) {
+        return;
+    }
+
+    refreshModelsForSelector.lastRequestAt = now;
+    requestModelRefresh('selector');
+}
+
+refreshModelsForSelector.lastRequestAt = 0;
 
 /**
  * Requests a fresh session list from the extension host.
@@ -173,6 +242,7 @@ function handleModelInputChange() {
         provider: selectedModelProvider(),
     });
     updateModelMeta();
+    renderModelRuntimeOptions();
 }
 
 /**
@@ -203,6 +273,7 @@ function handleCustomModelInput() {
         previewProvider: getProvider(customModelInput.value || ''),
     });
     updateModelMeta();
+    renderModelRuntimeOptions();
 }
 
 /**
@@ -380,7 +451,10 @@ function handlePromptKeydown(event) {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         logUiAction('clearChat', 'shortcut=ctrl-or-cmd-k');
-        vscode.postMessage({ type: 'clearChat' });
+        vscode.postMessage({
+            type: 'clearChat',
+            value: { threadId: getChatState().activeThreadId },
+        });
         return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {

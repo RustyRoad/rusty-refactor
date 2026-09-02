@@ -1,0 +1,17 @@
+{
+  "name": "rusty-refactor-kokoro-tts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "kokoro-js": "1.2.1"
+  },
+  "overrides": {
+    "sharp": "0.35.3"
+  }
+}

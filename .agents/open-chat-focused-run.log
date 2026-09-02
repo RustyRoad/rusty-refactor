@@ -1,0 +1,51 @@
+- Resolving version...
+✔ Validated version: insiders
+✔ Found existing install in C:\Users\riley\Documents\rusty-refactor\.vscode-test\vscode-win32-x64-archive-insiders
+
+Warning: 'cached-data' is not in the list of known options, but still passed to Electron/Chromium.
+[main 2026-08-30T04:37:06.389Z] StorageMainService: creating application shared storage
+[main 2026-08-30T04:37:06.533Z] [shared storage] Creating shared storage database at ':memory:' (wasCreated: true)
+[main 2026-08-30T04:37:06.537Z] [shared storage] Initializing fallback application storage (path: in-memory)
+[main 2026-08-30T04:37:06.598Z] [shared storage] Fallback application storage initialized with 3 items
+[main 2026-08-30T04:37:06.600Z] update#setState disabled
+[main 2026-08-30T04:37:06.600Z] update#ctor - updates are disabled by the environment
+[AgentHost:renderer] Acquiring MessagePort to agent host...
+[main 2026-08-30T04:37:08.532Z] AgentHostProcessManager: agent host started
+[ChatModelSelection] event=no-model-at-toolbar-build surface="workbench" sessionKey=undefined conversationKey=undefined modelTarget=undefined storageKey="chat.currentLanguageModel.panel" widgetViewKind="view"
+[ChatModelSelection] event=no-model-at-toolbar-build surface="workbench" sessionKey="local" conversationKey="vscode-chat-session://local/NGEzZjVjOTctNjRjNi00MWM2LTkwZjUtZWEzMTA0NDQ0NjYy" modelTarget=undefined storageKey="chat.currentLanguageModel.panel" widgetViewKind="view"
+[AgentHost:renderer] MessagePort acquired, creating client...
+[main 2026-08-30T04:37:09.704Z] [AgentHost:stderr] (node:39184) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `Code - Insiders --trace-deprecation ...` to show where the warning was created)
+
+Started local extension host with pid 92348.
+[AgentHost:renderer] Protocol connection established; clientId=ecd88c37-8088-48c0-9d18-8a223be0cf56
+Loading development extension at c:\Users\riley\Documents\rusty-refactor
+Unknown channel: agentHostClientByokLm
+Unknown channel: agentHostClientProxy
+Unknown channel: agentHostClientProxy
+[AccountPolicyGate] apply: state=inactive, reason=undefined, isRestricted=false
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] Clearing authentication for resource: https://api.github.com
+[ChatModelSelection] event=no-model-at-toolbar-build surface="workbench" sessionKey="local" conversationKey="vscode-chat-session://local/NGEzZjVjOTctNjRjNi00MWM2LTkwZjUtZWEzMTA0NDQ0NjYy" modelTarget=undefined storageKey="chat.currentLanguageModel.panel" widgetViewKind="view"
+Rusty Refactor is now active!
+rust-analyzer extension not found
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] Clearing authentication for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com
+[RustyRefactor] 2026-08-30T04:37:12.748Z - [Codetether] Loaded the native CLI Vault credential.
+Settings Sync: Account status changed from uninitialized to unavailable
+[0m[0m
+[0m  Open Rusty Refactor chat command[0m
+[RustyRefactor] 2026-08-30T04:37:12.991Z - [Codetether] Cleared the stale managed server session.
+Unknown channel: agentHostClientProxy
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+  [32m  ✔[0m[90m registers the open-chat command[0m[31m (331ms)[0m
+  [32m  ✔[0m[90m contributes an editor-title icon[0m
+  [32m  ✔[0m[90m registers the pop-out command[0m[33m (48ms)[0m
+  [32m  ✔[0m[90m contributes a sidebar pop-out action[0m
+  [32m  ✔[0m[90m exposes a webview pop-out action[0m
+  [32m  ✔[0m[90m supports auxiliary editor windows[0m
+[92m [0m[32m 6 passing[0m[90m (784ms)[0m
+[main 2026-08-30T04:37:13.832Z] Extension host with pid 92348 exited with code: 0, signal: unknown.
+[main 2026-08-30T04:37:14.863Z] AgentHostStarter: cannot create window connection: Agent Host process manager is shutting down.
+Exit code:   0

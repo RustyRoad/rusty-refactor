@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 
+import { compactVoiceInputError } from './chatVoiceInputError';
 import { ChatVoiceInputResult } from './chatVoiceInputTypes';
 
 /**
@@ -36,6 +37,7 @@ export class ChatVoiceInputProcess {
      * Stops the worker when the user cancels recognition.
      */
     public stop(): void {
+        this.completed = true;
         try {
             this.child.kill();
         } catch {
@@ -92,30 +94,7 @@ export class ChatVoiceInputProcess {
      */
     private exitError(code: number | null): string {
         const raw = this.stderr.trim() || `worker exited ${code}`;
-        return this.compactError(raw);
-    }
-
-    /**
-     * Converts native worker stderr into a concise user-facing message.
-     */
-    private compactError(raw: string): string {
-        if (raw.includes('speech privacy policy')) {
-            return 'Enable Windows speech privacy before using voice input.';
-        }
-
-        return raw
-            .split(/\r?\n/)
-            .map(line => line.trim())
-            .filter(line => line && !this.isBacktraceLine(line))
-            .slice(0, 4)
-            .join(' ');
-    }
-
-    /**
-     * Returns true for stack trace lines that should not reach the UI.
-     */
-    private isBacktraceLine(line: string): boolean {
-        return line === 'Stack backtrace:' || /^\d+:/.test(line);
+        return compactVoiceInputError(raw);
     }
 
     /**

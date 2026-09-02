@@ -7,4 +7,7 @@ export interface CodetetherSessionSummary {
     turnCount: number;
     updatedAt: number;
     preview: string;
+    format: 'agent' | 'history';
+    agent?: string;
+    model?: string;
 }

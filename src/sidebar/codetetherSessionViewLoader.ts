@@ -1,11 +1,9 @@
-import * as vscode from 'vscode';
-
 import { ChatMessage } from '../codetetherClient';
 import { CodetetherSessionLoader } from './codetetherSessionLoader';
 import { CodetetherSessionSummary } from './codetetherSessionTypes';
 
 /**
- * Loads persisted Codetether sessions into the sidebar webview.
+ * Loads persisted Codetether sessions into sidebar-ready message records.
  */
 export class CodetetherSessionViewLoader {
     /**
@@ -16,18 +14,14 @@ export class CodetetherSessionViewLoader {
     ) {}
 
     /**
-     * Posts a loaded session transcript and returns host chat history.
+     * Returns visible messages and provider history for one session.
      */
     public async load(
-        session: CodetetherSessionSummary,
-        view: vscode.WebviewView | undefined
-    ): Promise<ChatMessage[]> {
-        const loaded = await this.loader.load(session);
-        view?.webview.postMessage({
-            type: 'sessionLoaded',
-            sessionId: session.id,
-            messages: loaded.messages
-        });
-        return loaded.history;
+        session: CodetetherSessionSummary
+    ): Promise<{
+        history: ChatMessage[];
+        messages: ChatMessage[];
+    }> {
+        return this.loader.load(session);
     }
 }

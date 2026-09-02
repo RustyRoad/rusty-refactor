@@ -17,8 +17,13 @@ export class ChatSuggestionMarkup {
     public emptyState(): string {
         return [
             '<div class="empty-state" id="empty-state">',
+            '<div class="empty-mark" aria-hidden="true">CT</div>',
+            '<div class="empty-kicker">Workspace assistant</div>',
             '<div class="empty-title">',
-            'Start with a workspace task.',
+            'What should we work on?',
+            '</div>',
+            '<div class="empty-copy">',
+            'Ask about the codebase or start with a focused workflow.',
             '</div>',
             '<div class="quick-grid">',
             this.explainSuggestion(),

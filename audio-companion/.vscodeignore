@@ -1,0 +1,4 @@
+*.vsix
+.gitignore
+rust-backend/target/release/*.pdb
+rust-backend/target/release/*.dll

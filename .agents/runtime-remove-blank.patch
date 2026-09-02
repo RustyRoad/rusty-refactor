@@ -1,0 +1,9 @@
+diff --git a/src/tool/command_session/drain.rs b/src/tool/command_session/drain.rs
+--- a/src/tool/command_session/drain.rs
++++ b/src/tool/command_session/drain.rs
+@@ -47,5 +47,4 @@ fn refresh_status(command: &mut Running) -> std::io::Result<bool> {
+         command.stdin = None;
+     }
+     Ok(command.exit_code.is_some())
+ }
+-

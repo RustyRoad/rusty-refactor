@@ -1,18 +1,37 @@
 import * as vscode from 'vscode';
 
-import { CodetetherClient } from '../codetetherClient';
+import { CodetetherModelDiscovery } from '../codetetherClient';
 import {
     CodeTetherApiError,
     CodeTetherDiscoveryTelemetry
 } from '../codeTetherApiClient';
 import { logToOutput } from '../extractor';
 import { MODEL_SLOW_STATUS_MS } from './chatConstants';
-import { ModelListPayload } from './chatTypes';
+import {
+    ModelListPayload,
+    SidebarModelOption
+} from './chatTypes';
+import { SidebarModelRevalidator } from './sidebarModelRevalidator';
 
 interface SidebarModelDiscovery {
-    models: string[];
+    models: SidebarModelOption[];
     status?: string;
     telemetry: CodeTetherDiscoveryTelemetry;
+}
+
+/**
+ * Narrows model discovery to the operations required by the sidebar.
+ */
+export interface SidebarModelDiscoveryClient {
+    /**
+     * Reads the latest selector entries from the current Codetether endpoint.
+     */
+    discoverModelPickerItems(): Promise<CodetetherModelDiscovery>;
+
+    /**
+     * Reloads settings used when discovery starts a managed endpoint.
+     */
+    refreshConfig(): void;
 }
 
 /**
@@ -20,26 +39,34 @@ interface SidebarModelDiscovery {
  */
 export class ModelListService {
     private requestId = 0;
+    private readonly modelRevalidator =
+        new SidebarModelRevalidator<SidebarModelDiscovery>();
 
-    public constructor(private readonly client: CodetetherClient) {}
+    public constructor(
+        private readonly client: SidebarModelDiscoveryClient
+    ) {}
 
     /**
      * Refreshes the model list and streams progress to the view.
      *
      * Models are sourced from CodeTether's server-side HTTP model endpoint.
-     * VS Code language models remain a fallback when CodeTether is not
-     * configured or the HTTP endpoint is unavailable.
+     * Discovery errors are surfaced instead of switching providers so users
+     * can fix the configured CodeTether path directly.
      */
     public async sendModelsList(
-        view: vscode.WebviewView | undefined
+        view: vscode.Webview | undefined
     ): Promise<void> {
         if (!view) {
             return;
         }
 
         const requestId = ++this.requestId;
+        this.client.refreshConfig();
         const configuredModel = this.getConfiguredModel();
-        const initialModels = this.optionalModelGroup(configuredModel);
+        const initialModels = this.mergeModels(
+            this.optionalModelGroup(configuredModel),
+            this.modelRevalidator.current()
+        );
 
         this.postModels(view, requestId, {
             models: initialModels,
@@ -73,12 +100,21 @@ export class ModelListService {
     /**
      * Combines model groups with trimming, de-duplication, and sorting.
      */
-    public mergeModels(...groups: string[][]): string[] {
-        return [...new Set(
-            groups.flat()
-                .map(model => model.trim())
-                .filter(Boolean)
-        )].sort();
+    public mergeModels(
+        ...groups: SidebarModelOption[][]
+    ): SidebarModelOption[] {
+        const modelsById = new Map<string, SidebarModelOption>();
+
+        for (const model of groups.flat()) {
+            const normalized = this.normalizeModel(model);
+            if (normalized) {
+                modelsById.set(normalized.id, normalized);
+            }
+        }
+
+        return [...modelsById.values()].sort((left, right) => {
+            return this.compareModels(left, right);
+        });
     }
 
     /**
@@ -88,10 +124,10 @@ export class ModelListService {
      * list when not already present so it remains selectable as automatic.
      */
     private async discoverModels(
-        view: vscode.WebviewView,
+        view: vscode.Webview,
         requestId: number,
         configuredModel: string,
-        initialModels: string[]
+        initialModels: SidebarModelOption[]
     ): Promise<void> {
         let slowTimer: NodeJS.Timeout | undefined;
 
@@ -103,20 +139,25 @@ export class ModelListService {
                 ].join(' '));
             }, MODEL_SLOW_STATUS_MS);
 
-            const discovery = await this.discoverModelIds();
+            const discovery = await this.modelRevalidator.refresh(() => {
+                return this.discoverModelIds();
+            });
             this.clearTimer(slowTimer);
 
             if (!this.isCurrent(requestId)) {
                 return;
             }
 
-            const models = discovery.telemetry.fallbackUsed
-                ? this.mergeModels(
-                    this.optionalModelGroup(configuredModel),
-                    discovery.models,
-                    initialModels
-                )
-                : discovery.models;
+            const models = this.mergeModels(discovery.models);
+            const effectiveConfiguredModel =
+                this.availableConfiguredModel(configuredModel, models);
+            if (configuredModel && !effectiveConfiguredModel) {
+                await this.setDefaultModel('');
+                logToOutput(
+                    '[Codetether Chat] Cleared configured model missing '
+                    + 'from live discovery.'
+                );
+            }
             const telemetry = {
                 ...discovery.telemetry,
                 shownModelCount: models.length,
@@ -130,7 +171,7 @@ export class ModelListService {
             ].join(' '));
             this.postModels(view, requestId, {
                 models,
-                configuredModel,
+                configuredModel: effectiveConfiguredModel,
                 status: discovery.status,
                 discoveryTelemetry: telemetry
             });
@@ -147,65 +188,34 @@ export class ModelListService {
     }
 
     /**
-     * Discovers CodeTether model IDs and falls back to VS Code LM IDs.
+     * Discovers selector-ready CodeTether models from the configured endpoint.
      */
     private async discoverModelIds(): Promise<SidebarModelDiscovery> {
-        try {
-            const discovery = await this.client.discoverModelPickerItems();
-            const models = discovery.items.map(item => item.modelId);
+        const discovery = await this.client.discoverModelPickerItems();
+        const models = discovery.items.map(item => ({
+            id: item.modelId,
+            name: item.label,
+            provider: item.provider
+        }));
 
-            return {
-                models,
-                telemetry: {
-                    ...discovery.telemetry,
-                    shownModelCount: models.length,
-                    providerCounts: this.providerCounts(models)
-                }
-            };
-        } catch (error) {
-            this.showCodeTetherFailure(error);
-            const fallbackModels = await this.listVSCodeModelIds();
-            return {
-                models: fallbackModels,
-                status: this.fallbackStatus(error),
-                telemetry: {
-                    discoverySource: 'vscode-lm',
-                    serverUrl: this.safeServerUrlHint(),
-                    httpStatus: this.errorStatus(error),
-                    rawModelCount: fallbackModels.length,
-                    shownModelCount: fallbackModels.length,
-                    providerCounts: this.providerCounts(fallbackModels),
-                    fallbackUsed: true
-                }
-            };
-        }
+        return {
+            models,
+            telemetry: {
+                ...discovery.telemetry,
+                shownModelCount: models.length,
+                providerCounts: this.providerCounts(models)
+            }
+        };
     }
 
     /**
-     * Lists VS Code language model ids as provider/family strings.
+     * Counts selector models by their explicit provider field.
      */
-    private async listVSCodeModelIds(): Promise<string[]> {
-        try {
-            const models = await vscode.lm.selectChatModels();
-            return models.map(model => `${model.vendor}/${model.family}`);
-        } catch (error) {
-            const message = error instanceof Error
-                ? error.message
-                : String(error);
-            logToOutput(
-                `[Codetether Chat] VS Code fallback model` +
-                ` discovery failed: ${message}`
-            );
-            return [];
-        }
-    }
-
-    /**
-     * Counts model IDs by provider prefix without renaming providers.
-     */
-    private providerCounts(models: string[]): Record<string, number> {
+    private providerCounts(
+        models: SidebarModelOption[]
+    ): Record<string, number> {
         return models.reduce<Record<string, number>>((counts, model) => {
-            const provider = model.split('/')[0] || 'other';
+            const provider = model.provider || 'other';
             counts[provider] = (counts[provider] || 0) + 1;
             return counts;
         }, {});
@@ -224,28 +234,6 @@ export class ModelListService {
     }
 
     /**
-     * Builds a token-free status message for fallback discovery.
-     */
-    private fallbackStatus(error: unknown): string {
-        if (error instanceof CodeTetherApiError) {
-            if (error.kind === 'auth') {
-                return 'CodeTether token missing/wrong; using VS Code models.';
-            }
-            if (error.kind === 'policy') {
-                return [
-                    'CodeTether policy denied agent:read;',
-                    'using VS Code models.'
-                ].join(' ');
-            }
-            if (error.kind === 'network' || error.kind === 'timeout') {
-                return 'CodeTether server unavailable; using VS Code models.';
-            }
-        }
-
-        return 'CodeTether discovery failed; using VS Code models.';
-    }
-
-    /**
      * Shows the actionable CodeTether discovery failure once per refresh.
      */
     private showCodeTetherFailure(error: unknown): void {
@@ -255,7 +243,9 @@ export class ModelListService {
 
         if (error.kind === 'auth') {
             vscode.window.showWarningMessage(
-                'CodeTether token missing/wrong. Configure CODETETHER_TOKEN.'
+                'CodeTether rejected the model-discovery token. Reload the '
+                + 'window to restart the managed server, or check '
+                + 'CODETETHER_TOKEN if you point at your own server.'
             );
         } else if (error.kind === 'policy') {
             vscode.window.showWarningMessage(
@@ -296,13 +286,13 @@ export class ModelListService {
     }
 
     /**
-     * Sends a usable model list after discovery fails.
+     * Sends explicit model choices after CodeTether discovery fails.
      */
     private handleDiscoveryError(
-        view: vscode.WebviewView,
+        view: vscode.Webview,
         requestId: number,
         configuredModel: string,
-        initialModels: string[],
+        initialModels: SidebarModelOption[],
         err: unknown
     ): void {
         if (!this.isCurrent(requestId)) {
@@ -312,12 +302,46 @@ export class ModelListService {
         const message = err instanceof Error
             ? err.message
             : 'Failed to load models.';
+        this.showCodeTetherFailure(err);
         logToOutput(`[Codetether Chat] Model discovery failed: ${message}`);
         this.postModels(view, requestId, {
             models: initialModels,
             configuredModel,
-            status: `${message} Falling back to configured/custom models.`
+            status: this.discoveryFailureStatus(err),
+            discoveryTelemetry: {
+                discoverySource: 'codetether-api',
+                serverUrl: this.safeServerUrlHint(),
+                httpStatus: this.errorStatus(err),
+                rawModelCount: 0,
+                shownModelCount: initialModels.length,
+                providerCounts: this.providerCounts(initialModels),
+                fallbackUsed: false
+            }
         });
+    }
+
+    /**
+     * Builds a token-free status for a failed CodeTether model refresh.
+     */
+    private discoveryFailureStatus(error: unknown): string {
+        if (error instanceof CodeTetherApiError) {
+            if (error.kind === 'auth') {
+                return 'CodeTether rejected the discovery token; '
+                    + 'reload window.';
+            }
+            if (error.kind === 'policy') {
+                return 'CodeTether policy denied agent:read.';
+            }
+            if (error.kind === 'network' || error.kind === 'timeout') {
+                return 'CodeTether server unavailable.';
+            }
+        }
+
+        const message = error instanceof Error
+            ? error.message
+            : 'CodeTether discovery failed.';
+
+        return message;
     }
 
     /**
@@ -332,15 +356,85 @@ export class ModelListService {
     /**
      * Wraps a configured model as a list only when it has content.
      */
-    private optionalModelGroup(model: string): string[] {
-        return model ? [model] : [];
+    private optionalModelGroup(model: string): SidebarModelOption[] {
+        if (!model) {
+            return [];
+        }
+
+        return [{
+            id: model,
+            name: this.nameFromId(model),
+            provider: this.providerFromId(model)
+        }];
+    }
+
+    /**
+     * Keeps a configured default only while live discovery still exposes it.
+     */
+    private availableConfiguredModel(
+        configuredModel: string,
+        models: SidebarModelOption[]
+    ): string {
+        return models.some(model => model.id === configuredModel)
+            ? configuredModel
+            : '';
+    }
+
+    /**
+     * Trims a model option and rejects entries without an opaque ID.
+     */
+    private normalizeModel(
+        model: SidebarModelOption
+    ): SidebarModelOption | undefined {
+        const id = model.id.trim();
+        if (!id) {
+            return undefined;
+        }
+
+        return {
+            id,
+            name: model.name.trim() || this.nameFromId(id),
+            provider: model.provider.trim() || this.providerFromId(id)
+        };
+    }
+
+    /**
+     * Sorts models by provider, display name, and then opaque ID.
+     */
+    private compareModels(
+        left: SidebarModelOption,
+        right: SidebarModelOption
+    ): number {
+        const providerOrder = left.provider.localeCompare(right.provider);
+        if (providerOrder !== 0) {
+            return providerOrder;
+        }
+
+        const nameOrder = left.name.localeCompare(right.name);
+        return nameOrder !== 0 ? nameOrder : left.id.localeCompare(right.id);
+    }
+
+    /**
+     * Derives a readable model name for a configured legacy model ID.
+     */
+    private nameFromId(model: string): string {
+        const slash = model.indexOf('/');
+        return slash >= 0 ? model.slice(slash + 1) : model;
+    }
+
+    /**
+     * Derives a provider for a configured provider/model identifier.
+     */
+    private providerFromId(model: string): string {
+        const slash = model.indexOf('/');
+        return slash > 0 ? model.slice(0, slash) : 'other';
     }
 
     /**
      * Sends model results only for the latest model-listing request.
      */
     private postModels(
-        view: vscode.WebviewView,
+        view: vscode.Webview,
         requestId: number,
         payload: ModelListPayload
     ): void {
@@ -348,7 +442,7 @@ export class ModelListService {
             return;
         }
 
-        view.webview.postMessage({
+        view.postMessage({
             type: 'modelsListed',
             models: payload.models,
             configuredModel: payload.configuredModel,
@@ -361,7 +455,7 @@ export class ModelListService {
      * Sends model-loading status only for the latest listing request.
      */
     private postStatus(
-        view: vscode.WebviewView,
+        view: vscode.Webview,
         requestId: number,
         status: string
     ): void {
@@ -369,7 +463,7 @@ export class ModelListService {
             return;
         }
 
-        view.webview.postMessage({ type: 'modelStatus', status });
+        view.postMessage({ type: 'modelStatus', status });
     }
 
     /**

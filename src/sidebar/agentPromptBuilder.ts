@@ -19,12 +19,15 @@ export class AgentPromptBuilder {
 
     /**
      * Creates the full prompt sent to the Codetether chat-completion API.
+     *
+     * The optional parent model grounds model-mandatory sub-agent spawns.
      */
     public async buildAgentPrompt(
         userText: string,
         mode: ChatMode,
         feature: CodetetherFeature,
-        includeContext: boolean
+        includeContext: boolean,
+        parentModel = ''
     ): Promise<string> {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const context = includeContext
@@ -40,7 +43,7 @@ export class AgentPromptBuilder {
             userText,
             '',
             this.toolRuntimeInstruction(),
-            this.subagentWorkflow.instruction()
+            this.subagentWorkflow.instruction(parentModel)
         ].filter(Boolean).join('\n\n');
     }
 

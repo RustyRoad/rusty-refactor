@@ -1,5 +1,3 @@
-import * as vscode from 'vscode';
-
 import { ChatMessage } from '../codetetherClient';
 import {
     CodetetherSessionFileTranscript
@@ -12,6 +10,9 @@ import { CodetetherSessionService } from './codetetherSessions';
  */
 export interface CodetetherSessionOpenResult {
     history?: ChatMessage[];
+    messages?: ChatMessage[];
+    sessionId?: string;
+    title?: string;
     status: string;
     loaded: boolean;
 }
@@ -34,8 +35,7 @@ export class CodetetherSessionOpenService {
      */
     public async openSelected(
         sessionPath: string,
-        sessionId: string,
-        view: vscode.WebviewView | undefined
+        sessionId: string
     ): Promise<CodetetherSessionOpenResult> {
         const sessions = await this.sessions.listRecentSessions(200);
         const session = sessions.find(item => {
@@ -45,21 +45,23 @@ export class CodetetherSessionOpenService {
             return { status: 'Session not found.', loaded: false };
         }
 
-        const history = await this.loader.load(session, view);
-        return this.loadedResult(session.id, history);
+        const loaded = session.format === 'agent'
+            ? await this.fileTranscript.loadById(session.id)
+            : await this.loader.load(session);
+        return loaded
+            ? this.loadedResult(session.id, session.preview, loaded)
+            : { status: 'Session could not be read.', loaded: false };
     }
 
     /**
      * Loads a session by id or unique prefix pasted from the shell TUI.
      */
     public async openById(
-        sessionId: string,
-        view: vscode.WebviewView | undefined
+        sessionId: string
     ): Promise<CodetetherSessionOpenResult> {
         const session = await this.sessions.findSessionById(sessionId);
         if (session) {
-            const history = await this.loader.load(session, view);
-            return this.loadedResult(session.id, history);
+            return this.openSelected(session.path, session.id);
         }
 
         const loaded = await this.fileTranscript.loadById(sessionId);
@@ -70,12 +72,7 @@ export class CodetetherSessionOpenService {
             };
         }
 
-        view?.webview.postMessage({
-            type: 'sessionLoaded',
-            sessionId,
-            messages: loaded.messages
-        });
-        return this.loadedResult(sessionId, loaded.history);
+        return this.loadedResult(sessionId, 'Previous chat', loaded);
     }
 
     /**
@@ -83,10 +80,17 @@ export class CodetetherSessionOpenService {
      */
     private loadedResult(
         sessionId: string,
-        history: ChatMessage[]
+        title: string,
+        loaded: {
+            history: ChatMessage[];
+            messages: ChatMessage[];
+        }
     ): CodetetherSessionOpenResult {
         return {
-            history,
+            history: loaded.history,
+            messages: loaded.messages,
+            sessionId,
+            title,
             status: `Loaded session ${sessionId}`,
             loaded: true
         };
