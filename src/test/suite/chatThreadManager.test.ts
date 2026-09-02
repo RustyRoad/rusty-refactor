@@ -61,6 +61,7 @@ function threadSink(): ChatThreadSink {
 async function runsIndependentThreadsConcurrently(): Promise<void> {
     const completions: DeferredCompletion[] = [];
     const signals: Array<AbortSignal | undefined> = [];
+    const scopes: Array<string | undefined> = [];
     const client = {
         chatCompletion: async (
             _messages: ChatMessage[],
@@ -69,6 +70,7 @@ async function runsIndependentThreadsConcurrently(): Promise<void> {
             const completion = deferredCompletion();
             completions.push(completion);
             signals.push(options.signal);
+            scopes.push(options.serverScope);
             return completion.promise;
         }
     } as unknown as CodetetherClient;
@@ -90,6 +92,9 @@ async function runsIndependentThreadsConcurrently(): Promise<void> {
     assert.strictEqual(completions.length, 2);
     assert.strictEqual(signals[0]?.aborted, false);
     assert.strictEqual(signals[1]?.aborted, false);
+    assert.notStrictEqual(scopes[0], scopes[1]);
+    assert.strictEqual(scopes[0], firstId);
+    assert.strictEqual(scopes[1], second.id);
     assert.strictEqual(
         manager.summaries().filter(thread => thread.busy).length,
         2

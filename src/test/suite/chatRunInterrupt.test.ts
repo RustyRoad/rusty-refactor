@@ -106,7 +106,8 @@ async function hardStopsActiveRun(): Promise<void> {
             options = next;
         }),
         interruptSink(records),
-        interruptPromptBuilder()
+        interruptPromptBuilder(),
+        'chat-interrupt'
     );
 
     const run = controller.submit(interruptRequest('Long task'));
@@ -118,6 +119,7 @@ async function hardStopsActiveRun(): Promise<void> {
     });
     assert.strictEqual(records.finishes.length, 0);
     assert.strictEqual(options?.signal?.aborted, true);
+    assert.strictEqual(options?.serverScope, 'chat-interrupt');
     await run;
 
     const final = records.snapshots.at(-1);

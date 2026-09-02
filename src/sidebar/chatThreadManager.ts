@@ -218,7 +218,9 @@ export class ChatThreadManager {
             sessionId: '',
             run: new ChatRunController(
                 this.client,
-                this.createRunSink(id)
+                this.createRunSink(id),
+                undefined,
+                id
             ),
             hasUserPrompt: false
         };

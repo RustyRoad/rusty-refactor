@@ -12,12 +12,14 @@ export function codetetherManagedServerKey(
     workspaceUri: string,
     binaryPath: string,
     model: string,
-    modelOptions: CodetetherModelOptions
+    modelOptions: CodetetherModelOptions,
+    scope: string
 ): string {
     return JSON.stringify([
         workspaceUri,
         binaryPath,
         model,
-        codetetherModelOptionsKey(model, modelOptions)
+        codetetherModelOptionsKey(model, modelOptions),
+        scope
     ]);
 }

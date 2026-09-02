@@ -16,7 +16,8 @@ function separatesModelsAndOptions(): void {
         workspace,
         binary,
         'bedrock/model-a',
-        baseline
+        baseline,
+        'chat-1'
     );
 
     assert.strictEqual(
@@ -25,7 +26,8 @@ function separatesModelsAndOptions(): void {
             workspace,
             binary,
             'bedrock/model-a',
-            { ...baseline }
+            { ...baseline },
+            'chat-1'
         )
     );
     assert.notStrictEqual(
@@ -34,7 +36,8 @@ function separatesModelsAndOptions(): void {
             workspace,
             binary,
             'bedrock/model-b',
-            baseline
+            baseline,
+            'chat-1'
         )
     );
     assert.notStrictEqual(
@@ -43,7 +46,18 @@ function separatesModelsAndOptions(): void {
             workspace,
             binary,
             'bedrock/model-a',
-            { ...baseline, bedrockThinkingEffort: 'high' }
+            { ...baseline, bedrockThinkingEffort: 'high' },
+            'chat-1'
+        )
+    );
+    assert.notStrictEqual(
+        first,
+        codetetherManagedServerKey(
+            workspace,
+            binary,
+            'bedrock/model-a',
+            baseline,
+            'chat-2'
         )
     );
 }

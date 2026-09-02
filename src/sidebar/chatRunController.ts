@@ -92,7 +92,8 @@ export class ChatRunController {
     public constructor(
         private readonly client: CodetetherClient,
         private readonly sink: ChatRunSink,
-        private readonly promptBuilder = new AgentPromptBuilder()
+        private readonly promptBuilder = new AgentPromptBuilder(),
+        private readonly serverScope = 'chat-default'
     ) {
         this.resetHistory();
     }
@@ -203,7 +204,8 @@ export class ChatRunController {
                             active.steer = sender;
                         }
                     },
-                    sessionTitle: request.text.trim()
+                    sessionTitle: request.text.trim(),
+                    serverScope: this.serverScope
                 }
             );
             if (active.interruptRequested) {

@@ -23,6 +23,7 @@ import type {
 import {
     summarizeCodetetherProcessFailure
 } from './codetetherProcessFailure';
+import { forceStopCodetetherProcess } from './codetetherProcessStop';
 import { parseCodetetherRunOutput } from './codetetherRunOutput';
 import {
     readCodetetherSessionToolEvents
@@ -205,6 +206,7 @@ export interface CodetetherChatCompletionOptions {
     onProgress?: CodetetherChatProgressSink;
     sessionId?: string;
     sessionTitle?: string;
+    serverScope?: string;
     onSteeringReady?: (
         sender: CodetetherSteeringSender
     ) => void;
@@ -421,31 +423,73 @@ class CodetetherServeProcess implements vscode.Disposable {
 
     /**
      * Runs one agent prompt over the authenticated realtime session adapter.
+     *
+     * Aborting the request force-stops this chat's isolated server process
+     * tree before cancellation resolves, preventing detached provider or tool
+     * work from continuing after the visible interrupt boundary.
      */
     async sendPrompt(
         prompt: string,
         options: ServePromptOptions = {}
     ): Promise<JsChatResponse> {
         await this.ensureReady();
-        const port = await this.resolvePort();
-        const realtime = new CodetetherRealtimeClient(
-            CODETETHER_HOSTNAME,
-            port,
-            this.token
-        );
-        const response = await realtime.complete(prompt, {
-            sessionId: options.sessionId,
-            sessionTitle: options.sessionTitle,
-            signal: options.signal,
-            sink: options.onProgress,
-            onSteeringReady: options.onSteeringReady
-        });
-
-        return {
-            text: response.text,
-            tool_events: response.toolEvents,
-            session_id: response.sessionId
+        let hardStop: Promise<void> | undefined;
+        const stopOnAbort = (): void => {
+            hardStop ??= this.forceStopForInterrupt();
         };
+        options.signal?.addEventListener('abort', stopOnAbort, {
+            once: true
+        });
+        if (options.signal?.aborted) {
+            stopOnAbort();
+        }
+
+        try {
+            if (options.signal?.aborted) {
+                throw codetetherCancelledError();
+            }
+            const port = await this.resolvePort();
+            const realtime = new CodetetherRealtimeClient(
+                CODETETHER_HOSTNAME,
+                port,
+                this.token
+            );
+            const response = await realtime.complete(prompt, {
+                sessionId: options.sessionId,
+                sessionTitle: options.sessionTitle,
+                signal: options.signal,
+                sink: options.onProgress,
+                onSteeringReady: options.onSteeringReady
+            });
+
+            return {
+                text: response.text,
+                tool_events: response.toolEvents,
+                session_id: response.sessionId
+            };
+        } catch (error) {
+            if (options.signal?.aborted) {
+                stopOnAbort();
+                await hardStop;
+                throw codetetherCancelledError();
+            }
+            throw error;
+        } finally {
+            options.signal?.removeEventListener('abort', stopOnAbort);
+            await hardStop;
+        }
+    }
+
+    /**
+     * Terminates the isolated server process for an interrupted chat.
+     */
+    private async forceStopForInterrupt(): Promise<void> {
+        const child = this.child;
+        this.child = null;
+        this.readyPromise = null;
+        if (child) {
+            await forceStopCodetetherProcess(child);
+        }
     }
 
     async checkHealth(): Promise<boolean> {
@@ -467,7 +511,13 @@ class CodetetherServeProcess implements vscode.Disposable {
      */
     private async startAndWaitForHealth(): Promise<void> {
         const port = await this.resolvePort();
-        const args = ['serve', '--hostname', CODETETHER_HOSTNAME, '--port', String(port)];
+        const args = [
+            'serve',
+            '--hostname',
+            CODETETHER_HOSTNAME,
+            '--port',
+            String(port)
+        ];
         const env = await buildCodetetherProcessEnv(
             this.workspaceFolder,
             this.token,
@@ -477,25 +527,30 @@ class CodetetherServeProcess implements vscode.Disposable {
         );
         await this.storeSessionSecrets(port);
 
-        logToOutput(
-            `[Codetether] Starting server in ${this.workspaceFolder.uri.fsPath} on ${CODETETHER_HOSTNAME}:${port} with model ${this.model}`
-        );
+        const location = this.workspaceFolder.uri.fsPath;
+        logToOutput([
+            `[Codetether] Starting server in ${location}`,
+            `on ${CODETETHER_HOSTNAME}:${port}`,
+            `with model ${this.model}`
+        ].join(' '));
 
-        this.child = spawn(this.binaryPath, args, {
+        const child = spawn(this.binaryPath, args, {
             cwd: this.workspaceFolder.uri.fsPath,
+            detached: process.platform !== 'win32',
             env,
             shell: false,
             windowsHide: true
         });
+        this.child = child;
 
-        this.child.stdout?.on('data', (data) => {
+        child.stdout?.on('data', (data) => {
             const text = data.toString().trim();
             if (text) {
                 logToOutput(`[Codetether serve] ${text}`);
             }
         });
 
-        this.child.stderr?.on('data', (data) => {
+        child.stderr?.on('data', (data) => {
             const text = data.toString().trim();
             if (!text) {
                 return;
@@ -508,14 +563,21 @@ class CodetetherServeProcess implements vscode.Disposable {
             logToOutput(`[Codetether serve] ${text}`);
         });
 
-        this.child.on('error', (error) => {
-            logToOutput(`[Codetether] Server process error: ${error.message}`);
+        child.on('error', (error) => {
+            logToOutput(
+                `[Codetether] Server process error: ${error.message}`
+            );
         });
 
-        this.child.on('exit', (code, signal) => {
-            logToOutput(`[Codetether] Server exited with code=${code ?? 'null'} signal=${signal ?? 'null'}`);
-            this.child = null;
-            this.readyPromise = null;
+        child.on('exit', (code, signal) => {
+            logToOutput(
+                `[Codetether] Server exited with code=${code ?? 'null'} `
+                + `signal=${signal ?? 'null'}`
+            );
+            if (this.child === child) {
+                this.child = null;
+                this.readyPromise = null;
+            }
         });
 
         const deadline = Date.now() + SERVER_START_TIMEOUT_MS;
@@ -525,14 +587,18 @@ class CodetetherServeProcess implements vscode.Disposable {
                 return;
             }
 
-            if (this.child?.exitCode !== null && this.child?.exitCode !== undefined) {
-                throw new Error(this.buildStartupError(`Codetether serve exited with code ${this.child.exitCode}.`));
+            if (child.exitCode !== null) {
+                const message = 'Codetether serve exited with code '
+                    + `${child.exitCode}.`;
+                throw new Error(this.buildStartupError(message));
             }
 
             await sleep(HEALTH_POLL_INTERVAL_MS);
         }
 
-        throw new Error(this.buildStartupError('Timed out waiting for Codetether serve to become healthy.'));
+        throw new Error(this.buildStartupError(
+            'Timed out waiting for Codetether serve to become healthy.'
+        ));
     }
 
     /**
@@ -683,6 +749,7 @@ class CodetetherServeManager {
         binaryPath: string,
         model: string,
         modelOptions: CodetetherModelOptions,
+        scope: string,
         managedSessions?: CodetetherManagedSessionStore,
         vaultTokens?: CodetetherVaultTokenManager
     ): Promise<CodetetherServeProcess> {
@@ -690,7 +757,8 @@ class CodetetherServeManager {
             workspaceFolder.uri.toString(),
             binaryPath,
             model,
-            modelOptions
+            modelOptions,
+            scope
         );
 
         let server = this.servers.get(key);
@@ -834,7 +902,8 @@ export class CodetetherClient {
             this.binaryPath,
             model,
             options.modelOptions || defaultCodetetherModelOptions(),
-            this.managedSessions,
+            options.serverScope || 'chat-default',
+            undefined,
             this.vaultTokens
         );
 
@@ -1500,6 +1569,7 @@ export class CodetetherClient {
                 this.binaryPath,
                 model,
                 defaultCodetetherModelOptions(),
+                'availability',
                 this.managedSessions,
                 this.vaultTokens
             );
@@ -1640,6 +1710,7 @@ export class CodetetherClient {
             this.binaryPath,
             model,
             defaultCodetetherModelOptions(),
+            'model-discovery',
             this.managedSessions,
             this.vaultTokens
         );
