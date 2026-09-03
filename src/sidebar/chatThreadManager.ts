@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { CodetetherClient } from '../codetetherClient';
 import type { CodetetherToolEvent } from '../codetetherToolEvents';
 import {
@@ -68,6 +69,7 @@ interface ChatThreadRecord extends ChatThreadSummary {
  * Owns independent chat controllers so background sessions can keep running.
  */
 export class ChatThreadManager {
+    private readonly scopeId = randomUUID();
     private readonly threads = new Map<string, ChatThreadRecord>();
     private activeId = '';
     private nextThreadId = 0;
@@ -220,7 +222,7 @@ export class ChatThreadManager {
                 this.client,
                 this.createRunSink(id),
                 undefined,
-                id
+                `${this.scopeId}:${id}`
             ),
             hasUserPrompt: false
         };

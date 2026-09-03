@@ -93,8 +93,12 @@ async function runsIndependentThreadsConcurrently(): Promise<void> {
     assert.strictEqual(signals[0]?.aborted, false);
     assert.strictEqual(signals[1]?.aborted, false);
     assert.notStrictEqual(scopes[0], scopes[1]);
-    assert.strictEqual(scopes[0], firstId);
-    assert.strictEqual(scopes[1], second.id);
+    assert.ok(scopes[0]?.endsWith(`:${firstId}`));
+    assert.ok(scopes[1]?.endsWith(`:${second.id}`));
+    assert.strictEqual(
+        scopes[0]?.split(':')[0],
+        scopes[1]?.split(':')[0]
+    );
     assert.strictEqual(
         manager.summaries().filter(thread => thread.busy).length,
         2
@@ -108,6 +112,42 @@ async function runsIndependentThreadsConcurrently(): Promise<void> {
         0
     );
     manager.dispose();
+}
+
+/**
+ * Verifies independent chat windows cannot reuse one process scope.
+ */
+async function separatesChatWindowScopes(): Promise<void> {
+    const scopes: Array<string | undefined> = [];
+    const client = {
+        chatCompletion: async (
+            _messages: ChatMessage[],
+            options: CodetetherChatCompletionOptions
+        ): Promise<JsChatResponse> => {
+            scopes.push(options.serverScope);
+            return { text: 'Complete.' };
+        }
+    } as unknown as CodetetherClient;
+    const first = new ChatThreadManager(client, threadSink());
+    const second = new ChatThreadManager(client, threadSink());
+
+    await Promise.all([
+        first.submit(
+            first.activeThreadId(),
+            threadRequest('First window')
+        ),
+        second.submit(
+            second.activeThreadId(),
+            threadRequest('Second window')
+        )
+    ]);
+
+    assert.strictEqual(scopes.length, 2);
+    assert.notStrictEqual(scopes[0], scopes[1]);
+    assert.ok(scopes[0]?.endsWith(':chat-1'));
+    assert.ok(scopes[1]?.endsWith(':chat-1'));
+    first.dispose();
+    second.dispose();
 }
 
 /**
@@ -167,6 +207,10 @@ function registerChatThreadManagerTests(): void {
     test(
         'keeps separate chat transports running concurrently',
         runsIndependentThreadsConcurrently
+    );
+    test(
+        'separates process scopes across chat windows',
+        separatesChatWindowScopes
     );
     test(
         'interrupts only the selected chat transport',
