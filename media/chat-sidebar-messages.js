@@ -363,6 +363,7 @@ function renderToolEvents(wrap, toolEvents) {
  */
 function renderToolEvent(event, index) {
     const details = document.createElement('details');
+    details.open = false;
     details.className = 'tool-event ' + String(event.kind || 'call');
     details.dataset.disclosure = toolEventDisclosureKey(event, index);
     const summary = document.createElement('summary');

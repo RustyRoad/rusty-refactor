@@ -468,6 +468,59 @@ function rerendersStreamingMarkdown(): void {
 }
 
 /**
+ * Verifies newly streamed tool rows stay closed beside user-opened rows.
+ */
+function collapsesNewToolRowsWhileStreaming(): void {
+    const dom = createChatDom();
+    const browser = dom.window as unknown as ChatBrowserGlobals;
+    const document = dom.window.document;
+    const snapshot = {
+        id: 'streaming-tools-1',
+        content: '',
+        streaming: true,
+        toolEvents: [
+            {
+                kind: 'call',
+                id: 'call-1',
+                name: 'read',
+                arguments: '{}',
+            },
+        ],
+    };
+    browser.upsertStreamingMessage(snapshot);
+
+    const activity = document.querySelector(
+        '[data-message-id="streaming-tools-1"] .tool-events'
+    ) as HTMLDetailsElement | null;
+    const first = activity?.querySelector(
+        '[data-disclosure="tool-event:call:call-1"]'
+    ) as HTMLDetailsElement | null;
+    assert.ok(activity);
+    assert.ok(first);
+    activity.open = true;
+    first.open = true;
+
+    browser.upsertStreamingMessage({
+        ...snapshot,
+        toolEvents: [
+            ...snapshot.toolEvents,
+            {
+                kind: 'call',
+                id: 'call-2',
+                name: 'search',
+                arguments: '{}',
+            },
+        ],
+    });
+
+    const rows = activity.querySelectorAll('.tool-event');
+    assert.strictEqual(rows.length, 2);
+    assert.strictEqual((rows[0] as HTMLDetailsElement).open, true);
+    assert.strictEqual((rows[1] as HTMLDetailsElement).open, false);
+    dom.window.close();
+}
+
+/**
  * Verifies tool activity is grouped and collapsed until the user expands it.
  */
 function collapsesToolActivity(): void {
@@ -541,6 +594,10 @@ function registerMessageIntegrationTests(): void {
     test(
         'preserves the transcript scroll position',
         preservesTranscriptScrollPosition,
+    );
+    test(
+        'collapses newly streamed tool rows',
+        collapsesNewToolRowsWhileStreaming,
     );
     test('collapses tool activity by default', collapsesToolActivity);
 }

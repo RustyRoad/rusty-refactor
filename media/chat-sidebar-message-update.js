@@ -116,9 +116,10 @@ function updateToolRows(current, next) {
         });
         if (currentRow) {
             updateDisclosure(currentRow, nextRow);
-        } else {
-            currentList.appendChild(nextRow);
+            return;
         }
+        nextRow.open = false;
+        currentList.appendChild(nextRow);
     });
     Array.from(currentList.children).forEach(row => {
         if (!nextKeys.has(row.dataset.disclosure)) {
